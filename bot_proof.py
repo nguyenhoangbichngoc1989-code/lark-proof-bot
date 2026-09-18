@@ -1,5 +1,6 @@
 import static_ffmpeg
 static_ffmpeg.add_paths()
+
 import os
 import re
 import json
@@ -46,7 +47,6 @@ class RenderHealthHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(b"Bot Lark Proof is running healthy 24/7!")
 
     def log_message(self, format, *args):
-        # Ẩn bớt nhật ký HTTP request định kỳ để tránh tràn màn hình log
         pass
 
 def run_dummy_web_server():
@@ -132,7 +132,7 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VIDEO TUYỆT ĐỐI VỀ DƯỚI 25MB -----------------
+# ----------------- NÉN VIDEO VỀ DƯỚI 25MB -----------------
 def compress_video_if_large(video_path: str) -> str:
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
     if size_mb <= 27.0:
@@ -262,34 +262,10 @@ def convert_single_file(file_path: str) -> list[str]:
         except Exception:
             return [file_path]
 
-    elif ext_lower == ".dng":
-        out_path = f"{name}.jpg"
-        try:
-            import rawpy
-            with rawpy.imread(file_path) as raw:
-                rgb = raw.postprocess()
-                Image.fromarray(rgb).save(out_path, "JPEG", quality=95)
-            os.remove(file_path)
-            return [out_path]
-        except Exception:
-            return [file_path]
-
     elif ext_lower in [".webm", ".mkv"]:
         out_path = f"{name}.mp4"
         try:
             cmd = f'"{FFMPEG_BIN}" -y -i "{file_path}" -c:v libx264 -preset fast -c:a aac "{out_path}"'
-            subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-                os.remove(file_path)
-                return [out_path]
-        except Exception:
-            pass
-        return [file_path]
-
-    elif ext_lower == ".mp3":
-        out_path = f"{name}.wav"
-        try:
-            cmd = f'"{FFMPEG_BIN}" -y -i "{file_path}" "{out_path}"'
             subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
                 os.remove(file_path)
@@ -387,7 +363,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
     except Exception as e:
         print(f"Lỗi xử lý gửi gộp media: {e}")
 
-# ----------------- TẢI FILE GOOGLE DRIVE -----------------
+# ----------------- TẢI FILE GOOGLE DRIVE (TÍCH HỢP GDOWN) -----------------
 def check_gdrive_error(url: str) -> bool:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -421,57 +397,55 @@ def resolve_proof_url(url: str) -> str:
         return url
 
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
+    # 1. Thử tải bằng gdown (Vượt cảnh báo file lớn và quét virus tốt nhất)
+    try:
+        import gdown
+        save_name = preferred_name or f"gdrive_{file_id}.mp4"
+        save_path = os.path.join(target_dir, save_name)
+        url = f"https://drive.google.com/uc?id={file_id}"
+        output = gdown.download(url, save_path, quiet=True, fuzzy=True)
+        if output and os.path.exists(output) and os.path.getsize(output) > 2000:
+            print(f"📥 [gdown] Tải thành công tệp GDrive: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
+            return True
+    except Exception as e:
+        print(f"gdown thất bại, chuyển sang phương án Session: {e}")
+
+    # 2. Phương án dự phòng dùng Session tự bóc tách confirm_token
     session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,vi;q=0.8"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "*/*"
     }
 
-    urls_to_try = [
-        f"https://drive.usercontent.google.com/download?id={file_id}&export=download",
-        f"https://drive.google.com/uc?export=download&id={file_id}"
-    ]
+    try:
+        url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        res = session.get(url, headers=headers, stream=True, verify=False, timeout=60)
+        confirm_token = None
+        for k, v in res.cookies.items():
+            if k.startswith("download_warning"):
+                confirm_token = v
+                break
+        if not confirm_token:
+            match = re.search(r'confirm=([0-9A-Za-z_]+)', res.text)
+            if match:
+                confirm_token = match.group(1)
 
-    for download_url in urls_to_try:
-        try:
-            res = session.get(download_url, headers=headers, stream=True, verify=False, timeout=90)
-            if res.status_code == 200 and "text/html" in res.headers.get("Content-Type", ""):
-                confirm_token = None
-                for k, v in res.cookies.items():
-                    if k.startswith('download_warning'):
-                        confirm_token = v
-                        break
-                if not confirm_token:
-                    t_match = re.search(r'confirm=([0-9A-Za-z_]+)', res.text)
-                    if t_match:
-                        confirm_token = t_match.group(1)
+        if confirm_token:
+            url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={confirm_token}"
+            res = session.get(url, headers=headers, stream=True, verify=False, timeout=120)
 
-                if confirm_token:
-                    confirm_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={confirm_token}"
-                    res = session.get(confirm_url, headers=headers, stream=True, verify=False, timeout=90)
-
-            content_type = res.headers.get("Content-Type", "")
-            if res.status_code == 200 and "text/html" not in content_type:
-                save_name = preferred_name or f"gdrive_{file_id}"
-                cd = res.headers.get("Content-Disposition", "")
-                fname_match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';\r\n]+)', cd)
-                if fname_match:
-                    save_name = clean_file_display_name(urllib.parse.unquote(fname_match.group(1)))
-                elif "image" in content_type and not os.path.splitext(save_name)[1]:
-                    save_name = f"{save_name}.jpg"
-                elif ("video" in content_type or "mp4" in download_url) and not os.path.splitext(save_name)[1]:
-                    save_name = f"{save_name}.mp4"
-
-                save_path = os.path.join(target_dir, save_name)
-                with open(save_path, "wb") as f:
-                    for chunk in res.iter_content(chunk_size=1024 * 1024):
-                        if chunk:
-                            f.write(chunk)
-                print(f"📥 Tải thành công tệp GDrive: {save_name} ({format_size(os.path.getsize(save_path))})")
+        if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", ""):
+            save_name = preferred_name or f"gdrive_{file_id}.mp4"
+            save_path = os.path.join(target_dir, save_name)
+            with open(save_path, "wb") as f:
+                for chunk in res.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+            if os.path.exists(save_path) and os.path.getsize(save_path) > 2000:
+                print(f"📥 Tải thành công tệp GDrive (Session): {save_name} ({format_size(os.path.getsize(save_path))})")
                 return True
-        except Exception as e:
-            print(f"Thử tải {download_url} thất bại: {e}")
+    except Exception as e:
+        print(f"Lỗi Session download: {e}")
 
     return False
 
@@ -490,7 +464,7 @@ def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
         matches = re.findall(r'\["([a-zA-Z0-9_-]{28,45})",\["([^"]+)"', html)
         for fid, fname in matches:
             fname_clean = clean_file_display_name(fname)
-            if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".avi", ".mkv", ".jpg", ".png", ".jpeg", ".webp", ".pdf", ".docx", ".xlsx"]):
+            if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".avi", ".mkv", ".jpg", ".png", ".jpeg", ".webp", ".pdf"]):
                 found_files[fid] = fname_clean
 
         if not found_files:
@@ -965,7 +939,6 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         print(f"Lỗi handle_message: {e}")
 
 def handle_message_update(data) -> None:
-    # Bỏ qua sự kiện sửa tin nhắn để không in lỗi đỏ trên console
     pass
 
 def start_bot():
@@ -973,10 +946,10 @@ def start_bot():
     print("🚀 BOT LARK PROOF (PHIÊN BẢN CLOUD BẢO MẬT 2026)...")
     print("=" * 60)
     
-    # 1. Khởi chạy cổng web ngầm để Render phát hiện Port và đánh dấu Live
+    # Khởi chạy cổng web ngầm để Render xác nhận Live
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
-    # 2. Đăng ký nhận sự kiện tin nhắn Lark WebSocket
+    # Đăng ký nhận sự kiện WebSocket từ Lark
     event_handler = lark.EventDispatcherHandler.builder("", "") \
         .register_p2_im_message_receive_v1(handle_message) \
         .build()
