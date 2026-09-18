@@ -363,7 +363,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
     except Exception as e:
         print(f"Lỗi xử lý gửi gộp media: {e}")
 
-# ----------------- TẢI FILE GOOGLE DRIVE (TÍCH HỢP GDOWN) -----------------
+# ----------------- TẢI FILE GOOGLE DRIVE -----------------
 def check_gdrive_error(url: str) -> bool:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -397,26 +397,36 @@ def resolve_proof_url(url: str) -> str:
         return url
 
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
-    # 1. Thử tải bằng gdown (Vượt cảnh báo file lớn và quét virus tốt nhất)
+    save_name = preferred_name or f"gdrive_{file_id}.mp4"
+    save_path = os.path.join(target_dir, save_name)
+
+    # 1. Tải bằng gdown trực tiếp qua ID
     try:
         import gdown
-        save_name = preferred_name or f"gdrive_{file_id}.mp4"
-        save_path = os.path.join(target_dir, save_name)
-        url = f"https://drive.google.com/uc?id={file_id}"
-        output = gdown.download(url, save_path, quiet=True, fuzzy=True)
+        output = gdown.download(id=file_id, output=save_path, quiet=False)
         if output and os.path.exists(output) and os.path.getsize(output) > 2000:
-            print(f"📥 [gdown] Tải thành công tệp GDrive: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
+            print(f"📥 [gdown] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
             return True
     except Exception as e:
-        print(f"gdown thất bại, chuyển sang phương án Session: {e}")
+        print(f"gdown id thất bại: {e}")
 
-    # 2. Phương án dự phòng dùng Session tự bóc tách confirm_token
+    # 2. Tải bằng gdown qua link chia sẻ
+    try:
+        import gdown
+        url = f"https://drive.google.com/uc?id={file_id}"
+        output = gdown.download(url, save_path, quiet=False)
+        if output and os.path.exists(output) and os.path.getsize(output) > 2000:
+            print(f"📥 [gdown url] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
+            return True
+    except Exception as e:
+        print(f"gdown url thất bại: {e}")
+
+    # 3. Phương án dự phòng dùng Session tự xử lý confirm token
     session = requests.Session()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*"
     }
-
     try:
         url = f"https://drive.google.com/uc?export=download&id={file_id}"
         res = session.get(url, headers=headers, stream=True, verify=False, timeout=60)
@@ -435,8 +445,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
             res = session.get(url, headers=headers, stream=True, verify=False, timeout=120)
 
         if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", ""):
-            save_name = preferred_name or f"gdrive_{file_id}.mp4"
-            save_path = os.path.join(target_dir, save_name)
             with open(save_path, "wb") as f:
                 for chunk in res.iter_content(chunk_size=1024 * 1024):
                     if chunk:
