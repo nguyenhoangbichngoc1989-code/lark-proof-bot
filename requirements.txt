@@ -5,3 +5,4 @@ Pillow
 pillow-heif
 pypdfium2
 yt-dlp
+static-ffmpeg
