@@ -9,6 +9,8 @@ import datetime
 import unicodedata
 import zipfile
 import base64
+import http.server
+import socketserver
 import requests
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import *
@@ -19,18 +21,37 @@ import pillow_heif
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pillow_heif.register_heif_opener()
 
+# Lấy thông tin xác thực từ Biến môi trường trên Render
 APP_ID = os.environ.get("APP_ID", "")
 APP_SECRET = os.environ.get("APP_SECRET", "")
 
-BASE_DIR = r"C:\Users\ADMIN\BOT"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = os.path.join(BASE_DIR, "temp_files")
 ERROR_IMG_PATH = os.path.join(BASE_DIR, "gdrive_error.png")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
-FFMPEG_BIN = os.path.join(BASE_DIR, "ffmpeg.exe") if os.path.exists(os.path.join(BASE_DIR, "ffmpeg.exe")) else "ffmpeg"
+FFMPEG_BIN = "ffmpeg"
 
 PROCESSED_MESSAGES = set()
 
 client = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).domain(lark.LARK_DOMAIN).build()
+
+# ----------------- SERVER HTTP GIỮ TRẠNG THÁI LIVE TRÊN RENDER -----------------
+class RenderHealthHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Bot Lark Proof is running healthy 24/7!")
+
+    def log_message(self, format, *args):
+        # Ẩn bớt nhật ký HTTP request định kỳ để tránh tràn màn hình log
+        pass
+
+def run_dummy_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    with socketserver.TCPServer(("", port), RenderHealthHandler) as httpd:
+        print(f"🌐 Đã mở cổng HTTP {port} để giữ dịch vụ Render hoạt động...")
+        httpd.serve_forever()
 
 # ----------------- QUẢN LÝ LỊCH SỬ & ĐẾM SỐ LẦN XIN -----------------
 def load_history() -> dict:
@@ -310,11 +331,8 @@ def upload_file_direct(file_path: str, file_type: str) -> str:
     return ""
 
 def upload_and_send_batch_proofs(message_id: str, final_files: list):
-    """Gộp nhóm và gửi toàn bộ danh sách tệp vào Thread một cách đồng bộ"""
     try:
         print(f"🚀 Bắt đầu đẩy gộp {len(final_files)} tệp vào Thread...")
-        
-        # 1. Gom nhóm các ảnh để gửi đồng loạt (nếu muốn tối ưu hiển thị)
         image_keys = []
         for f in final_files:
             file_path = f["path"]
@@ -331,19 +349,17 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                         image_keys.append(create_resp.data.image_key)
                         print(f"✅ Đã chuẩn bị ảnh: {file_name}")
 
-        # Gửi các ảnh đã gom nhóm (nếu có)
         for img_k in image_keys:
             body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
             client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
 
-        # 2. Gửi các tệp video, PDF, tài liệu khác
         for f in final_files:
             file_path = f["path"]
             file_name = f["name"]
             file_ext = f["ext"]
 
             if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
-                continue # Đã xử lý ở trên
+                continue
 
             if file_ext in [".mp4", ".mov"]:
                 upload_path = compress_video_if_large(file_path)
@@ -853,7 +869,7 @@ def process_request(message_id: str, text: str, sender_id: str):
     }
     reply_thread_card(message_id, report_card_payload)
 
-    # GỬI GỘP TẤT CẢ TỆP VÀO THREAD TRONG 1 LẦN
+    # GỬI GỘP TẤT CẢ TỆP VÀO THREAD
     upload_and_send_batch_proofs(message_id, final_files)
 
     # THẺ 2: THÔNG BÁO HOÀN TẤT
@@ -947,13 +963,18 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         print(f"Lỗi handle_message: {e}")
 
 def handle_message_update(data) -> None:
+    # Bỏ qua sự kiện sửa tin nhắn để không in lỗi đỏ trên console
     pass
 
 def start_bot():
     print("=" * 60)
-    print("🚀 BOT LARK PROOF (PHIÊN BẢN GỘP NHÓM TỆP 2026)...")
+    print("🚀 BOT LARK PROOF (PHIÊN BẢN CLOUD BẢO MẬT 2026)...")
     print("=" * 60)
     
+    # 1. Khởi chạy cổng web ngầm để Render phát hiện Port và đánh dấu Live
+    threading.Thread(target=run_dummy_web_server, daemon=True).start()
+
+    # 2. Đăng ký nhận sự kiện tin nhắn Lark WebSocket
     event_handler = lark.EventDispatcherHandler.builder("", "") \
         .register_p2_im_message_receive_v1(handle_message) \
         .build()
