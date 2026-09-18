@@ -34,6 +34,9 @@ ERROR_IMG_PATH = os.path.join(BASE_DIR, "gdrive_error.png")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
 FFMPEG_BIN = "ffmpeg"
 
+# Giới hạn dung lượng tải về an toàn cho Render Free Tier (350 MB)
+MAX_SAFE_DOWNLOAD_MB = 350
+
 PROCESSED_MESSAGES = set()
 
 client = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).domain(lark.LARK_DOMAIN).build()
@@ -132,7 +135,7 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VIDEO VỀ DƯỚI 25MB -----------------
+# ----------------- NÉN VIDEO VỀ DƯỚI 25MB (TỐI ƯU RAM) -----------------
 def compress_video_if_large(video_path: str) -> str:
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
     if size_mb <= 27.0:
@@ -145,7 +148,8 @@ def compress_video_if_large(video_path: str) -> str:
     scale_cmd = '-vf "scale=\'min(720,iw)\':-2"'
     bitrate_cmd = '-b:v 600k -maxrate 800k -bufsize 1000k'
 
-    cmd = f'"{FFMPEG_BIN}" -y -i "{video_path}" -c:v libx264 {bitrate_cmd} {scale_cmd} -preset veryfast -c:a aac -b:a 48k "{compressed_path}"'
+    # Dùng threads 1 để không nuốt cạn RAM của Render
+    cmd = f'"{FFMPEG_BIN}" -y -threads 1 -i "{video_path}" -c:v libx264 {bitrate_cmd} {scale_cmd} -preset veryfast -c:a aac -b:a 48k "{compressed_path}"'
     try:
         subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=400)
         if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 0:
@@ -177,14 +181,6 @@ def download_youtube_video(url: str, target_dir: str) -> bool:
                 return True
     except Exception as e:
         print(f"Lỗi tải YouTube video: {e}")
-        try:
-            output_template = os.path.join(target_dir, "youtube_video.mp4")
-            cmd = f'python -m yt_dlp -o "{output_template}" "{url}"'
-            subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-            if os.path.exists(output_template) and os.path.getsize(output_template) > 1000:
-                return True
-        except Exception:
-            pass
     return False
 
 # ----------------- CHUYỂN ĐỔI FILE (.JFIF -> .JPEG, PDF -> ẢNH) -----------------
@@ -405,12 +401,12 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
         import gdown
         output = gdown.download(id=file_id, output=save_path, quiet=False)
         if output and os.path.exists(output) and os.path.getsize(output) > 2000:
-            print(f"📥 [gdown] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
+            print(f"📥 [gdown id] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
             return True
     except Exception as e:
         print(f"gdown id thất bại: {e}")
 
-    # 2. Tải bằng gdown qua link chia sẻ
+    # 2. Tải bằng gdown qua link trực tiếp
     try:
         import gdown
         url = f"https://drive.google.com/uc?id={file_id}"
@@ -421,10 +417,10 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"gdown url thất bại: {e}")
 
-    # 3. Phương án dự phòng dùng Session tự xử lý confirm token
+    # 3. Dự phòng Session
     session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*"
     }
     try:
@@ -459,7 +455,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
 def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     try:
         res = requests.get(folder_url, headers=headers, timeout=20, verify=False)
@@ -481,16 +477,6 @@ def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
                 fname_clean = clean_file_display_name(fname)
                 if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".jpg", ".png", ".jpeg", ".webp", ".pdf"]):
                     found_files[fid] = fname_clean
-
-        if not found_files:
-            folder_id_match = re.search(r'/folders/([a-zA-Z0-9_-]+)', folder_url)
-            folder_id = folder_id_match.group(1) if folder_id_match else ""
-            raw_ids = set(re.findall(r'["\']([a-zA-Z0-9_-]{28,40})["\']', html))
-            idx = 1
-            for rid in raw_ids:
-                if rid != folder_id:
-                    found_files[rid] = f"gdrive_item_{idx}"
-                    idx += 1
 
         if found_files:
             print(f"📂 Đã tìm thấy {len(found_files)} tệp trong Folder Google Drive. Đang tải...")
@@ -531,7 +517,7 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
     print(f"☁️ Đang xử lý link OneDrive/SharePoint: {url}")
     session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*"
     }
 
@@ -605,11 +591,6 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
                             print(f"✅ Đã tải gói thư mục thành công ({format_size(os.path.getsize(bundle_path))})")
                             extract_all_zips(target_dir)
                             return len(os.listdir(target_dir)) > 0
-                        else:
-                            try:
-                                os.remove(bundle_path)
-                            except Exception:
-                                pass
             except Exception as e:
                 print(f"Lỗi tải bundle {dl_url}: {e}")
 
