@@ -1,0 +1,7 @@
+lark-oapi
+requests
+urllib3
+Pillow
+pillow-heif
+pypdfium2
+yt-dlp
