@@ -24,7 +24,6 @@ import pillow_heif
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pillow_heif.register_heif_opener()
 
-# Lấy thông tin xác thực từ Biến môi trường trên Render
 APP_ID = os.environ.get("APP_ID", "")
 APP_SECRET = os.environ.get("APP_SECRET", "")
 
@@ -392,7 +391,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     save_name = preferred_name or f"gdrive_{file_id}.mp4"
     save_path = os.path.join(target_dir, save_name)
 
-    # 1. Tải bằng gdown trực tiếp qua ID
     try:
         import gdown
         output = gdown.download(id=file_id, output=save_path, quiet=False)
@@ -402,7 +400,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"gdown id thất bại: {e}")
 
-    # 2. Tải bằng gdown qua link trực tiếp
     try:
         import gdown
         url = f"https://drive.google.com/uc?id={file_id}"
@@ -413,7 +410,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"gdown url thất bại: {e}")
 
-    # 3. Dự phòng Session
     session = requests.Session()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -455,7 +451,6 @@ def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
     folder_id = folder_match.group(1) if folder_match else ""
     clean_folder_url = f"https://drive.google.com/drive/folders/{folder_id}" if folder_id else folder_url.split("?")[0]
 
-    # 1. Thử dùng tính năng chuyên dụng download_folder của gdown
     try:
         import gdown
         downloaded = gdown.download_folder(clean_folder_url, output=target_dir, quiet=False, use_cookies=False)
@@ -465,7 +460,6 @@ def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
     except Exception as e:
         print(f"gdown folder thất bại: {e}")
 
-    # 2. Phương án bóc tách file ID từ HTML thư mục
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     }
@@ -543,18 +537,27 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
         parsed = urllib.parse.urlparse(url)
         base_domain = f"{parsed.scheme}://{parsed.netloc}"
 
-        zip_download_urls = []
-        if "download=1" not in url:
-            sep = "&" if "?" in url else "?"
-            zip_download_urls.append(f"{url}{sep}download=1")
-        else:
-            zip_download_urls.append(url)
+        # 1. Truy cập trang để theo redirect và lấy cookie/session
+        r_page = session.get(url, headers=headers, timeout=25, verify=False, allow_redirects=True)
+        final_page_url = r_page.url
 
-        user_match = re.search(r'(/personal/[^/]+)', url)
+        # 2. Xử lý tải gói zip từ SharePoint
+        zip_download_urls = []
+        user_match = re.search(r'(/personal/[^/]+)', final_page_url) or re.search(r'(/personal/[^/]+)', url)
         web_path = user_match.group(1) if user_match else ""
-        token_match = re.search(r'/:f:/p/[^/]+/([a-zA-Z0-9_-]+)', url)
-        if token_match and web_path:
-            zip_download_urls.append(f"{base_domain}{web_path}/_layouts/15/download.aspx?share={token_match.group(1)}")
+
+        token_match = re.search(r'/:f:/p/[^/]+/([a-zA-Z0-9_-]+)', url) or re.search(r'/:f:/p/[^/]+/([a-zA-Z0-9_-]+)', final_page_url)
+        share_token = token_match.group(1) if token_match else ""
+
+        if share_token and web_path:
+            zip_download_urls.append(f"{base_domain}{web_path}/_layouts/15/download.aspx?share={share_token}")
+            zip_download_urls.append(f"{base_domain}/_layouts/15/download.aspx?share={share_token}")
+
+        if "download=1" not in final_page_url:
+            sep = "&" if "?" in final_page_url else "?"
+            zip_download_urls.append(f"{final_page_url}{sep}download=1")
+        else:
+            zip_download_urls.append(final_page_url)
 
         for dl_url in zip_download_urls:
             try:
@@ -576,13 +579,14 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
             except Exception as e:
                 print(f"Lỗi tải bundle {dl_url}: {e}")
 
+        # 3. Phương án bóc tách Microsoft Graph API Shares
         clean_share_url = url.split("?")[0]
         encoded = base64.b64encode(clean_share_url.encode('utf-8')).decode('utf-8')
-        sharing_token = "u!" + encoded.rstrip('=').replace('/', '_').replace('+', '-')
+        sharing_token_b64 = "u!" + encoded.rstrip('=').replace('/', '_').replace('+', '-')
 
         api_endpoints = [
-            f"{base_domain}/_api/v2.0/shares/{sharing_token}/driveItem/children",
-            f"https://api.onedrive.com/v1.0/shares/{sharing_token}/root/children"
+            f"{base_domain}/_api/v2.0/shares/{sharing_token_b64}/driveItem/children",
+            f"https://api.onedrive.com/v1.0/shares/{sharing_token_b64}/root/children"
         ]
 
         for ep in api_endpoints:
@@ -953,10 +957,8 @@ def start_bot():
     print("🚀 BOT LARK PROOF (PHIÊN BẢN CLOUD BẢO MẬT 2026)...")
     print("=" * 60)
     
-    # Khởi chạy cổng web ngầm để Render xác nhận Live
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
-    # Đăng ký nhận sự kiện WebSocket từ Lark
     event_handler = lark.EventDispatcherHandler.builder("", "") \
         .register_p2_im_message_receive_v1(handle_message) \
         .build()
