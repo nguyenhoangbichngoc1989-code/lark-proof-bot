@@ -38,9 +38,9 @@ FFMPEG_BIN = "ffmpeg"
 
 PROCESSED_MESSAGES = set()
 
-# Khởi tạo Session toàn cục với Connection Pooling
+# Connection Pooling siêu tốc
 global_session = requests.Session()
-retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+retries = Retry(total=2, backoff_factor=0.3, status_forcelist=[500, 502, 503, 504])
 adapter = HTTPAdapter(pool_connections=20, pool_maxsize=50, max_retries=retries)
 global_session.mount("https://", adapter)
 global_session.mount("http://", adapter)
@@ -144,31 +144,32 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VIDEO TỐC ĐỘ CAO & TIẾT KIỆM RAM -----------------
+# ----------------- NÉN VIDEO SIÊU TỐC (CHỈ NÉN KHI > 30MB) -----------------
 def compress_video_if_large(video_path: str) -> str:
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
-    if size_mb <= 26.0:
+    # Nếu video nhỏ hơn 30MB, không cần nén để tiết kiệm 100% thời gian chờ
+    if size_mb <= 30.0:
+        print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) đạt chuẩn an toàn, gửi trực tiếp!")
         return video_path
 
-    print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) đang nén siêu tốc...")
+    print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) vượt 30MB. Đang nén tăng tốc...")
     name, ext = os.path.splitext(video_path)
     compressed_path = f"{name}_compressed.mp4"
 
+    # Profile nén nhanh: 480p, crf 30, preset ultrafast, fps 24
     cmd = (
         f'"{FFMPEG_BIN}" -y -threads 2 -i "{video_path}" '
-        f'-vf "scale=\'min(480,iw)\':-2" '
-        f'-c:v libx264 -preset ultrafast -tune fastdecode '
-        f'-x264opts "rc-lookahead=5:bframes=0" '
-        f'-b:v 400k -maxrate 550k -bufsize 600k '
+        f'-vf "scale=\'min(480,iw)\':-2,fps=24" '
+        f'-c:v libx264 -preset ultrafast -crf 30 '
         f'-c:a aac -b:a 32k -ac 1 '
         f'"{compressed_path}"'
     )
     try:
-        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=240)
+        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
         gc.collect()
         if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
             compressed_mb = os.path.getsize(compressed_path) / (1024 * 1024)
-            print(f"✅ Đã nén video an toàn về {compressed_mb:.2f}MB (< 25MB).")
+            print(f"✅ Đã nén video thành công về {compressed_mb:.2f}MB.")
             return compressed_path
     except Exception as e:
         print(f"Lỗi nén video: {e}")
@@ -214,9 +215,9 @@ def convert_single_file(file_path: str) -> list[str]:
         out_path = f"{name}.jpg"
         try:
             with Image.open(file_path) as img:
-                img.convert("RGB").save(out_path, "JPEG", quality=90)
+                img.convert("RGB").save(out_path, "JPEG", quality=85)
             os.remove(file_path)
-            print(f"🖼️ Đã chuyển đổi tệp {os.path.basename(file_path)} (.jfif) sang định dạng JPEG!")
+            print(f"🖼️ Đã chuyển đổi tệp {os.path.basename(file_path)} (.jfif) sang JPEG!")
             return [out_path]
         except Exception as e:
             print(f"Lỗi chuyển .jfif sang jpeg: {e}")
@@ -266,7 +267,7 @@ def convert_single_file(file_path: str) -> list[str]:
         out_path = f"{name}.jpg"
         try:
             with Image.open(file_path) as img:
-                img.convert("RGB").save(out_path, "JPEG", quality=90)
+                img.convert("RGB").save(out_path, "JPEG", quality=85)
             os.remove(file_path)
             return [out_path]
         except Exception:
@@ -337,7 +338,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                     create_resp = client.im.v1.image.create(create_req)
                     if create_resp and create_resp.success():
                         image_keys.append(create_resp.data.image_key)
-                        print(f"✅ Đã chuẩn bị ảnh: {file_name}")
+                        print(f"✅ Đã upload ảnh: {file_name}")
 
         for img_k in image_keys:
             body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
@@ -384,7 +385,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
 def check_gdrive_error(url: str) -> bool:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        res = global_session.get(url, headers=headers, timeout=8, verify=False)
+        res = global_session.get(url, headers=headers, timeout=6, verify=False)
         text = res.text
         return ("không thể mở tệp tại thời điểm này" in text or "unable to open the file at this time" in text.lower())
     except Exception:
@@ -416,16 +417,16 @@ def resolve_proof_url(url: str) -> str:
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
     save_name = preferred_name or f"gdrive_{file_id}.mp4"
     save_path = os.path.join(target_dir, save_name)
-    print(f"📥 Đang tải tệp Google Drive ID: {file_id} ...")
+    print(f"📥 Đang tải siêu tốc Google Drive ID: {file_id} ...")
 
-    # 1. Tải qua Session với token xác nhận quét virus tự động
+    # 1. Tải bằng Session Buffer 8MB kèm token virus
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*"
     }
     try:
         url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=30)
+        res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=25)
         
         confirm_token = None
         for k, v in res.cookies.items():
@@ -443,7 +444,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
         if confirm_token:
             url = f"https://drive.google.com/uc?export=download&confirm={confirm_token}&id={file_id}"
-            res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=180)
+            res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=120)
 
         if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", ""):
             with open(save_path, "wb") as f:
@@ -451,31 +452,20 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
                     if chunk:
                         f.write(chunk)
             if os.path.exists(save_path) and os.path.getsize(save_path) > 2000:
-                print(f"📥 Tải siêu tốc tệp GDrive thành công: {save_name} ({format_size(os.path.getsize(save_path))})")
+                print(f"📥 Tải siêu tốc thành công: {save_name} ({format_size(os.path.getsize(save_path))})")
                 return True
     except Exception as e:
         print(f"Session download: {e}")
 
-    # 2. Thử tải qua gdown ID
+    # 2. Dự phòng bằng gdown
     try:
         import gdown
-        output = gdown.download(id=file_id, output=save_path, quiet=False)
+        output = gdown.download(id=file_id, output=save_path, quiet=True)
         if output and os.path.exists(output) and os.path.getsize(output) > 2000:
             print(f"📥 [gdown id] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
             return True
-    except Exception as e:
-        print(f"gdown id: {e}")
-
-    # 3. Thử tải qua gdown URL
-    try:
-        import gdown
-        url = f"https://drive.google.com/uc?id={file_id}"
-        output = gdown.download(url, save_path, quiet=False)
-        if output and os.path.exists(output) and os.path.getsize(output) > 2000:
-            print(f"📥 [gdown url] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
-            return True
-    except Exception as e:
-        print(f"gdown url: {e}")
+    except Exception:
+        pass
 
     return False
 
@@ -487,12 +477,12 @@ def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
 
     try:
         import gdown
-        downloaded = gdown.download_folder(clean_folder_url, output=target_dir, quiet=False, use_cookies=False)
+        downloaded = gdown.download_folder(clean_folder_url, output=target_dir, quiet=True, use_cookies=False)
         if downloaded and len(downloaded) > 0:
             print(f"✅ [gdown] Đã tải thành công {len(downloaded)} tệp từ thư mục Google Drive!")
             return True
-    except Exception as e:
-        print(f"gdown folder: {e}")
+    except Exception:
+        pass
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -979,7 +969,8 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
     except Exception as e:
         print(f"Lỗi handle_message: {e}")
 
-def do_nothing_handler(data) -> None:
+def handle_raw_event(data: lark.CustomizedEvent) -> None:
+    # Lọc bỏ êm đẹp mọi sự kiện message.updated_v1
     pass
 
 def start_bot():
@@ -989,17 +980,11 @@ def start_bot():
     
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
-    # Khởi tạo Event Dispatcher chuẩn
-    builder = lark.EventDispatcherHandler.builder("", "")
-    builder.register_p2_im_message_receive_v1(handle_message)
-    
-    event_handler = builder.build()
-    
-    # Bắt trực tiếp sự kiện updated_v1 để không bị log đỏ
-    if hasattr(event_handler, "custom_handlers"):
-        event_handler.custom_handlers["im.message.updated_v1"] = do_nothing_handler
-    elif hasattr(event_handler, "_handlers"):
-        event_handler._handlers["im.message.updated_v1"] = do_nothing_handler
+    # Đăng ký nhận tin nhắn chuẩn xác
+    event_handler = lark.EventDispatcherHandler.builder("", "") \
+        .register_p2_im_message_receive_v1(handle_message) \
+        .register_p1_customized_event("im.message.updated_v1", handle_raw_event) \
+        .build()
 
     ws_client = lark.ws.Client(
         APP_ID, 
