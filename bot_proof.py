@@ -90,7 +90,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
+        return f"{size_bytes / (1024 * 1024):.2f} KB"
     return f"{size_bytes} B"
 
 def clean_file_display_name(filename: str) -> str:
@@ -132,7 +132,7 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VIDEO SIÊU TIẾT KIỆM RAM (< 50MB RAM USAGE) -----------------
+# ----------------- NÉN VIDEO TIẾT KIỆM RAM CHO RENDER -----------------
 def compress_video_if_large(video_path: str) -> str:
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
     if size_mb <= 26.0:
@@ -142,7 +142,6 @@ def compress_video_if_large(video_path: str) -> str:
     name, ext = os.path.splitext(video_path)
     compressed_path = f"{name}_compressed.mp4"
 
-    # Triệt tiêu bộ nhớ đệm khung hình bằng rc-lookahead=5, bframes=0 và giới hạn threads=1
     cmd = (
         f'"{FFMPEG_BIN}" -y -threads 1 -i "{video_path}" '
         f'-vf "scale=\'min(480,iw)\':-2" '
@@ -157,7 +156,7 @@ def compress_video_if_large(video_path: str) -> str:
         gc.collect()
         if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
             compressed_mb = os.path.getsize(compressed_path) / (1024 * 1024)
-            print(f"✅ Đã nén video an toàn về {compressed_mb:.2f}MB (dưới 25MB).")
+            print(f"✅ Đã nén video an toàn về {compressed_mb:.2f}MB (< 25MB).")
             return compressed_path
     except Exception as e:
         print(f"Lỗi nén video: {e}")
@@ -275,7 +274,7 @@ def convert_single_file(file_path: str) -> list[str]:
 
     return [file_path]
 
-# ----------------- UPLOAD FILE VÀ GỬI GỘP VÀO THREAD -----------------
+# ----------------- UPLOAD FILE VÀ GỬI VÀO THREAD -----------------
 def upload_file_direct(file_path: str, file_type: str) -> str:
     token = get_tenant_access_token()
     if not token:
@@ -311,7 +310,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
     try:
         print(f"🚀 Bắt đầu đẩy gộp {len(final_files)} tệp vào Thread...")
         
-        # 1. Gửi tất cả ảnh trước
+        # 1. Gửi ảnh
         image_keys = []
         for f in final_files:
             file_path = f["path"]
@@ -332,7 +331,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
             client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
 
-        # 2. Xử lý video và tệp đính kèm
+        # 2. Gửi video và các tệp khác
         for f in final_files:
             file_path = f["path"]
             file_name = f["name"]
@@ -344,14 +343,12 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             if file_ext in [".mp4", ".mov"]:
                 upload_path = compress_video_if_large(file_path)
 
-                # Gửi khung phát video (media)
                 media_key = upload_file_direct(upload_path, "mp4")
                 if media_key:
                     media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(media_body).build())
                     print(f"🎬 Đã gửi khung phát video: {file_name}")
 
-                # Gửi tệp tải xuống (stream)
                 stream_key = upload_file_direct(upload_path, "stream")
                 if stream_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": stream_key})).msg_type("file").reply_in_thread(True).build()
@@ -371,7 +368,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
     except Exception as e:
         print(f"Lỗi xử lý gửi gộp media: {e}")
 
-# ----------------- TẢI FILE GOOGLE DRIVE -----------------
+# ----------------- TẢI FILE GOOGLE DRIVE (TỐI ƯU FILE LỚN TRÊN 25MB) -----------------
 def check_gdrive_error(url: str) -> bool:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -408,33 +405,16 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     save_name = preferred_name or f"gdrive_{file_id}.mp4"
     save_path = os.path.join(target_dir, save_name)
 
-    try:
-        import gdown
-        output = gdown.download(id=file_id, output=save_path, quiet=False)
-        if output and os.path.exists(output) and os.path.getsize(output) > 2000:
-            print(f"📥 [gdown id] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
-            return True
-    except Exception as e:
-        print(f"gdown id thất bại: {e}")
-
-    try:
-        import gdown
-        url = f"https://drive.google.com/uc?id={file_id}"
-        output = gdown.download(url, save_path, quiet=False)
-        if output and os.path.exists(output) and os.path.getsize(output) > 2000:
-            print(f"📥 [gdown url] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
-            return True
-    except Exception as e:
-        print(f"gdown url thất bại: {e}")
-
+    # 1. Tải qua Session với token xác nhận quét virus tự động
     session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*"
     }
     try:
         url = f"https://drive.google.com/uc?export=download&id={file_id}"
         res = session.get(url, headers=headers, stream=True, verify=False, timeout=60)
+        
         confirm_token = None
         for k, v in res.cookies.items():
             if k.startswith("download_warning"):
@@ -444,10 +424,14 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
             match = re.search(r'confirm=([0-9A-Za-z_]+)', res.text)
             if match:
                 confirm_token = match.group(1)
+        if not confirm_token:
+            match_uuid = re.search(r'name="uuid"\s+value="([^"]+)"', res.text)
+            if match_uuid:
+                confirm_token = match_uuid.group(1)
 
         if confirm_token:
-            url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={confirm_token}"
-            res = session.get(url, headers=headers, stream=True, verify=False, timeout=120)
+            url = f"https://drive.google.com/uc?export=download&confirm={confirm_token}&id={file_id}"
+            res = session.get(url, headers=headers, stream=True, verify=False, timeout=180)
 
         if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", ""):
             with open(save_path, "wb") as f:
@@ -459,6 +443,27 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
                 return True
     except Exception as e:
         print(f"Lỗi Session download: {e}")
+
+    # 2. Thử tải bằng gdown qua ID
+    try:
+        import gdown
+        output = gdown.download(id=file_id, output=save_path, quiet=False)
+        if output and os.path.exists(output) and os.path.getsize(output) > 2000:
+            print(f"📥 [gdown id] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
+            return True
+    except Exception as e:
+        print(f"gdown id thất bại: {e}")
+
+    # 3. Thử tải bằng gdown qua URL trực tiếp
+    try:
+        import gdown
+        url = f"https://drive.google.com/uc?id={file_id}"
+        output = gdown.download(url, save_path, quiet=False)
+        if output and os.path.exists(output) and os.path.getsize(output) > 2000:
+            print(f"📥 [gdown url] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
+            return True
+    except Exception as e:
+        print(f"gdown url thất bại: {e}")
 
     return False
 
@@ -870,7 +875,7 @@ def process_request(message_id: str, text: str, sender_id: str):
     }
     reply_thread_card(message_id, report_card_payload)
 
-    # GỬI GỘP TẤT CẢ TỆP VÀO THREAD (ĐÃ TỐI ƯU RAM)
+    # GỬI GỘP TẤT CẢ TỆP VÀO THREAD
     upload_and_send_batch_proofs(message_id, final_files)
 
     # THẺ 2: THÔNG BÁO HOÀN TẤT
