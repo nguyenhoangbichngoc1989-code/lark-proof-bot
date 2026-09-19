@@ -895,7 +895,7 @@ def process_request(message_id: str, text: str, sender_id: str):
 
     title_side_md = (
         "       <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n"
-        "<text_tag color='turquoise'>-ˋˏ   𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎F ˎˊ-</text_tag>"
+        "<text_tag color='turquoise'>-ˋˏ   𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
     )
 
     at_middle_md = (
