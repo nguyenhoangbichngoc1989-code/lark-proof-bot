@@ -827,8 +827,8 @@ def process_request(message_id: str, text: str, sender_id: str):
     # THẺ 1: BÁO CÁO BAN ĐẦU
     card_element_top = (
         f"🎫 {ticket_id}\n"
-        f" ╰┄▸💾 {format_size(total_size)}\n"
-        f"     ╰┄▸🗂 {len(final_files)}/{len(final_files)}\n\n"
+        f"   ╰┄▸💾 {format_size(total_size)}\n"
+        f"        ╰┄▸🗂 {len(final_files)}/{len(final_files)}\n\n"
         f"{type_content}\n\n"
     )
 
