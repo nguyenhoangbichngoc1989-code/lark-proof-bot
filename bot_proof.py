@@ -38,7 +38,7 @@ FFMPEG_BIN = "ffmpeg"
 
 PROCESSED_MESSAGES = set()
 
-# Khởi tạo Session toàn cục với Connection Pooling để tái sử dụng kết nối mạng siêu tốc
+# Khởi tạo Session toàn cục với Connection Pooling
 global_session = requests.Session()
 retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
 adapter = HTTPAdapter(pool_connections=20, pool_maxsize=50, max_retries=retries)
@@ -60,9 +60,12 @@ class RenderHealthHandler(http.server.BaseHTTPRequestHandler):
 
 def run_dummy_web_server():
     port = int(os.environ.get("PORT", 10000))
-    with socketserver.TCPServer(("", port), RenderHealthHandler) as httpd:
-        print(f"🌐 Đã mở cổng HTTP {port} để giữ dịch vụ Render hoạt động...")
-        httpd.serve_forever()
+    try:
+        with socketserver.TCPServer(("", port), RenderHealthHandler) as httpd:
+            print(f"🌐 Đã mở cổng HTTP {port} để giữ dịch vụ Render hoạt động...")
+            httpd.serve_forever()
+    except Exception as e:
+        print(f"Lưu ý server HTTP: {e}")
 
 # ----------------- QUẢN LÝ LỊCH SỬ & ĐẾM SỐ LẦN XIN -----------------
 def load_history() -> dict:
@@ -381,7 +384,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
 def check_gdrive_error(url: str) -> bool:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        res = global_session.get(url, headers=headers, timeout=10, verify=False)
+        res = global_session.get(url, headers=headers, timeout=8, verify=False)
         text = res.text
         return ("không thể mở tệp tại thời điểm này" in text or "unable to open the file at this time" in text.lower())
     except Exception:
@@ -413,14 +416,16 @@ def resolve_proof_url(url: str) -> str:
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
     save_name = preferred_name or f"gdrive_{file_id}.mp4"
     save_path = os.path.join(target_dir, save_name)
+    print(f"📥 Đang tải tệp Google Drive ID: {file_id} ...")
 
+    # 1. Tải qua Session với token xác nhận quét virus tự động
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*"
     }
     try:
         url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=45)
+        res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=30)
         
         confirm_token = None
         for k, v in res.cookies.items():
@@ -441,17 +446,17 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
             res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=180)
 
         if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", ""):
-            # Tăng buffer lên 8MB để tối ưu I/O ghi đĩa
             with open(save_path, "wb") as f:
                 for chunk in res.iter_content(chunk_size=8 * 1024 * 1024):
                     if chunk:
                         f.write(chunk)
             if os.path.exists(save_path) and os.path.getsize(save_path) > 2000:
-                print(f"📥 Tải siêu tốc tệp GDrive: {save_name} ({format_size(os.path.getsize(save_path))})")
+                print(f"📥 Tải siêu tốc tệp GDrive thành công: {save_name} ({format_size(os.path.getsize(save_path))})")
                 return True
     except Exception as e:
-        print(f"Lỗi tải Session: {e}")
+        print(f"Session download: {e}")
 
+    # 2. Thử tải qua gdown ID
     try:
         import gdown
         output = gdown.download(id=file_id, output=save_path, quiet=False)
@@ -459,8 +464,9 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
             print(f"📥 [gdown id] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
             return True
     except Exception as e:
-        print(f"gdown id thất bại: {e}")
+        print(f"gdown id: {e}")
 
+    # 3. Thử tải qua gdown URL
     try:
         import gdown
         url = f"https://drive.google.com/uc?id={file_id}"
@@ -469,7 +475,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
             print(f"📥 [gdown url] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
             return True
     except Exception as e:
-        print(f"gdown url thất bại: {e}")
+        print(f"gdown url: {e}")
 
     return False
 
@@ -486,7 +492,7 @@ def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
             print(f"✅ [gdown] Đã tải thành công {len(downloaded)} tệp từ thư mục Google Drive!")
             return True
     except Exception as e:
-        print(f"gdown folder thất bại: {e}")
+        print(f"gdown folder: {e}")
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -973,7 +979,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
     except Exception as e:
         print(f"Lỗi handle_message: {e}")
 
-def handle_message_update(data) -> None:
+def do_nothing_handler(data) -> None:
     pass
 
 def start_bot():
@@ -983,12 +989,17 @@ def start_bot():
     
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
-    event_handler = lark.EventDispatcherHandler.builder("", "") \
-        .register_p2_im_message_receive_v1(handle_message) \
-        .build()
-
-    if hasattr(event_handler, "_handlers"):
-        event_handler._handlers["im.message.updated_v1"] = handle_message_update
+    # Khởi tạo Event Dispatcher chuẩn
+    builder = lark.EventDispatcherHandler.builder("", "")
+    builder.register_p2_im_message_receive_v1(handle_message)
+    
+    event_handler = builder.build()
+    
+    # Bắt trực tiếp sự kiện updated_v1 để không bị log đỏ
+    if hasattr(event_handler, "custom_handlers"):
+        event_handler.custom_handlers["im.message.updated_v1"] = do_nothing_handler
+    elif hasattr(event_handler, "_handlers"):
+        event_handler._handlers["im.message.updated_v1"] = do_nothing_handler
 
     ws_client = lark.ws.Client(
         APP_ID, 
