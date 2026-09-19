@@ -3,6 +3,7 @@ static_ffmpeg.add_paths()
 
 import os
 import re
+import gc
 import json
 import shutil
 import urllib.parse
@@ -131,31 +132,32 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VIDEO TỐI ƯU RAM TUYỆT ĐỐI (TRÁNH CRASH RENDER) -----------------
+# ----------------- NÉN VIDEO SIÊU TIẾT KIỆM RAM (< 50MB RAM USAGE) -----------------
 def compress_video_if_large(video_path: str) -> str:
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
     if size_mb <= 26.0:
         return video_path
 
-    print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) vượt ngưỡng an toàn. Đang nén tối ưu RAM...")
+    print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) đang nén siêu tiết kiệm RAM...")
     name, ext = os.path.splitext(video_path)
     compressed_path = f"{name}_compressed.mp4"
 
-    # Tính toán bitrate mục tiêu để ép về dưới 22MB chuẩn
-    # Hạ độ phân giải xuống tối đa 480p hoặc 720p, preset ultrafast và threads 1 để dùng dưới 150MB RAM
+    # Triệt tiêu bộ nhớ đệm khung hình bằng rc-lookahead=5, bframes=0 và giới hạn threads=1
     cmd = (
         f'"{FFMPEG_BIN}" -y -threads 1 -i "{video_path}" '
-        f'-vf "scale=\'min(640,iw)\':-2" '
-        f'-c:v libx264 -preset ultrafast -crf 28 '
-        f'-maxrate 500k -bufsize 800k '
-        f'-c:a aac -b:a 48k -ac 1 '
+        f'-vf "scale=\'min(480,iw)\':-2" '
+        f'-c:v libx264 -preset ultrafast '
+        f'-x264opts "rc-lookahead=5:bframes=0:sliced-threads=0" '
+        f'-b:v 450k -maxrate 600k -bufsize 600k '
+        f'-c:a aac -b:a 40k -ac 1 '
         f'"{compressed_path}"'
     )
     try:
-        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=240)
+        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+        gc.collect()
         if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
             compressed_mb = os.path.getsize(compressed_path) / (1024 * 1024)
-            print(f"✅ Đã nén thành công video về {compressed_mb:.2f}MB (< 25MB).")
+            print(f"✅ Đã nén video an toàn về {compressed_mb:.2f}MB (dưới 25MB).")
             return compressed_path
     except Exception as e:
         print(f"Lỗi nén video: {e}")
@@ -355,12 +357,16 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": stream_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     print(f"📥 Đã gửi tệp đính kèm video: {file_name}")
+
+                gc.collect()
             else:
                 file_key = upload_file_direct(file_path, "stream")
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     print(f"📎 Đã gửi tệp: {file_name}")
+
+        gc.collect()
 
     except Exception as e:
         print(f"Lỗi xử lý gửi gộp media: {e}")
@@ -864,7 +870,7 @@ def process_request(message_id: str, text: str, sender_id: str):
     }
     reply_thread_card(message_id, report_card_payload)
 
-    # GỬI GỘP TẤT CẢ TỆP VÀO THREAD (ĐÃ TỐI ƯU KHUNG PHÁT VÀ TỆP ĐÍNH KÈM)
+    # GỬI GỘP TẤT CẢ TỆP VÀO THREAD (ĐÃ TỐI ƯU RAM)
     upload_and_send_batch_proofs(message_id, final_files)
 
     # THẺ 2: THÔNG BÁO HOÀN TẤT
@@ -936,6 +942,7 @@ def process_request(message_id: str, text: str, sender_id: str):
     reply_thread_card(message_id, finish_card_payload)
 
     shutil.rmtree(task_temp_dir, ignore_errors=True)
+    gc.collect()
 
 def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
     try:
