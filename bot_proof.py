@@ -147,7 +147,6 @@ def reply_thread_card(message_id: str, card_content: dict):
 # ----------------- NÉN VIDEO SIÊU TỐC (CHỈ NÉN KHI > 30MB) -----------------
 def compress_video_if_large(video_path: str) -> str:
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
-    # Nếu video nhỏ hơn 30MB, không cần nén để tiết kiệm 100% thời gian chờ
     if size_mb <= 30.0:
         print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) đạt chuẩn an toàn, gửi trực tiếp!")
         return video_path
@@ -156,7 +155,6 @@ def compress_video_if_large(video_path: str) -> str:
     name, ext = os.path.splitext(video_path)
     compressed_path = f"{name}_compressed.mp4"
 
-    # Profile nén nhanh: 480p, crf 30, preset ultrafast, fps 24
     cmd = (
         f'"{FFMPEG_BIN}" -y -threads 2 -i "{video_path}" '
         f'-vf "scale=\'min(480,iw)\':-2,fps=24" '
@@ -419,7 +417,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     save_path = os.path.join(target_dir, save_name)
     print(f"📥 Đang tải siêu tốc Google Drive ID: {file_id} ...")
 
-    # 1. Tải bằng Session Buffer 8MB kèm token virus
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*"
@@ -457,7 +454,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"Session download: {e}")
 
-    # 2. Dự phòng bằng gdown
     try:
         import gdown
         output = gdown.download(id=file_id, output=save_path, quiet=True)
@@ -827,8 +823,8 @@ def process_request(message_id: str, text: str, sender_id: str):
     # THẺ 1: BÁO CÁO BAN ĐẦU
     card_element_top = (
         f"🎫 {ticket_id}\n"
-        f"   ╰┄▸💾 {format_size(total_size)}\n"
-        f"        ╰┄▸🗂 {len(final_files)}/{len(final_files)}\n\n"
+        f"    ╰┄▸💾 {format_size(total_size)}\n"
+        f"          ╰┄▸🗂 {len(final_files)}/{len(final_files)}\n\n"
         f"{type_content}\n\n"
     )
 
@@ -969,9 +965,20 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
     except Exception as e:
         print(f"Lỗi handle_message: {e}")
 
-def handle_raw_event(data: lark.CustomizedEvent) -> None:
-    # Lọc bỏ êm đẹp mọi sự kiện message.updated_v1
-    pass
+class CustomEventDispatcher(lark.EventDispatcherHandler):
+    def do(self, req: lark.EventReq) -> lark.EventResp:
+        # Bỏ qua âm thầm sự kiện updated_v1 để không xuất hiện lỗi processor not found
+        try:
+            body = json.loads(req.body.decode("utf-8")) if isinstance(req.body, bytes) else json.loads(req.body)
+            header = body.get("header", {})
+            event_type = header.get("event_type", "")
+            if event_type == "im.message.updated_v1":
+                resp = lark.EventResp()
+                resp.status_code = 200
+                return resp
+        except Exception:
+            pass
+        return super().do(req)
 
 def start_bot():
     print("=" * 60)
@@ -980,11 +987,9 @@ def start_bot():
     
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
-    # Đăng ký nhận tin nhắn chuẩn xác
-    event_handler = lark.EventDispatcherHandler.builder("", "") \
-        .register_p2_im_message_receive_v1(handle_message) \
-        .register_p1_customized_event("im.message.updated_v1", handle_raw_event) \
-        .build()
+    builder = CustomEventDispatcher.builder("", "")
+    builder.register_p2_im_message_receive_v1(handle_message)
+    event_handler = builder.build()
 
     ws_client = lark.ws.Client(
         APP_ID, 
