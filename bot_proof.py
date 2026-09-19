@@ -151,7 +151,6 @@ def compress_video_if_large(video_path: str) -> str:
     name, ext = os.path.splitext(video_path)
     compressed_path = f"{name}_compressed.mp4"
 
-    # Tối ưu hóa: ultrafast + fastdecode + scale 480p + 2 luồng CPU ảo Render
     cmd = (
         f'"{FFMPEG_BIN}" -y -threads 2 -i "{video_path}" '
         f'-vf "scale=\'min(480,iw)\':-2" '
@@ -378,7 +377,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
     except Exception as e:
         print(f"Lỗi xử lý gửi gộp media: {e}")
 
-# ----------------- TẢI GOOGLE DRIVE TỐC ĐỘ CAO (BUFFER 4MB) -----------------
+# ----------------- TẢI GOOGLE DRIVE TỐC ĐỘ CAO (BUFFER 8MB) -----------------
 def check_gdrive_error(url: str) -> bool:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -415,7 +414,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     save_name = preferred_name or f"gdrive_{file_id}.mp4"
     save_path = os.path.join(target_dir, save_name)
 
-    # 1. Tải siêu tốc qua Session (Buffer 4MB) với xác nhận quét virus tự động
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*"
@@ -443,9 +441,9 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
             res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=180)
 
         if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", ""):
-            # Tăng buffer lên 4MB để tối ưu I/O ghi đĩa
+            # Tăng buffer lên 8MB để tối ưu I/O ghi đĩa
             with open(save_path, "wb") as f:
-                for chunk in res.iter_content(chunk_size=4 * 1024 * 1024):
+                for chunk in res.iter_content(chunk_size=8 * 1024 * 1024):
                     if chunk:
                         f.write(chunk)
             if os.path.exists(save_path) and os.path.getsize(save_path) > 2000:
@@ -454,7 +452,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"Lỗi tải Session: {e}")
 
-    # 2. Thử bằng gdown qua ID
     try:
         import gdown
         output = gdown.download(id=file_id, output=save_path, quiet=False)
@@ -464,7 +461,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"gdown id thất bại: {e}")
 
-    # 3. Thử bằng gdown qua URL
     try:
         import gdown
         url = f"https://drive.google.com/uc?id={file_id}"
@@ -596,7 +592,7 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
                     c_type = b_res.headers.get("Content-Type", "").lower()
                     if "text/html" not in c_type:
                         with open(bundle_path, "wb") as f:
-                            for chunk in b_res.iter_content(chunk_size=4 * 1024 * 1024):
+                            for chunk in b_res.iter_content(chunk_size=8 * 1024 * 1024):
                                 if chunk:
                                     f.write(chunk)
                         if os.path.exists(bundle_path) and os.path.getsize(bundle_path) > 500 and zipfile.is_zipfile(bundle_path):
@@ -633,7 +629,7 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
                                 f_res = global_session.get(dl_url, headers=headers, stream=True, timeout=90, verify=False)
                                 if f_res.status_code == 200:
                                     with open(save_p, "wb") as f:
-                                        for chunk in f_res.iter_content(chunk_size=4 * 1024 * 1024):
+                                        for chunk in f_res.iter_content(chunk_size=8 * 1024 * 1024):
                                             if chunk:
                                                 f.write(chunk)
                                     print(f"📥 Tải thành công: {fname} ({format_size(os.path.getsize(save_p))})")
@@ -711,7 +707,7 @@ def download_proof(url: str, target_dir: str) -> bool:
 
             save_path = os.path.join(target_dir, filename)
             with open(save_path, "wb") as f:
-                for chunk in res.iter_content(chunk_size=4 * 1024 * 1024):
+                for chunk in res.iter_content(chunk_size=8 * 1024 * 1024):
                     if chunk:
                         f.write(chunk)
             print(f"📥 Đã tải thành công: {filename}")
@@ -904,8 +900,8 @@ def process_request(message_id: str, text: str, sender_id: str):
     )
 
     thankyou_center_md = (
-        "<font color='turquoise'> ┊t h a n k y o u┊</font>"\n"
-        "<font color='turquoise'>┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+        "<font color='turquoise'> ┊t h a n k y o u┊\n"
+        "┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
     )
 
     finish_card_payload = {
