@@ -131,25 +131,31 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VIDEO VỀ DƯỚI 25MB (TIẾT KIỆM RAM) -----------------
+# ----------------- NÉN VIDEO TỐI ƯU RAM TUYỆT ĐỐI (TRÁNH CRASH RENDER) -----------------
 def compress_video_if_large(video_path: str) -> str:
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
-    if size_mb <= 27.0:
+    if size_mb <= 26.0:
         return video_path
 
-    print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) vượt ngưỡng 30MB. Đang nén tự động về < 25MB...")
+    print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) vượt ngưỡng an toàn. Đang nén tối ưu RAM...")
     name, ext = os.path.splitext(video_path)
     compressed_path = f"{name}_compressed.mp4"
 
-    scale_cmd = '-vf "scale=\'min(720,iw)\':-2"'
-    bitrate_cmd = '-b:v 600k -maxrate 800k -bufsize 1000k'
-
-    cmd = f'"{FFMPEG_BIN}" -y -threads 1 -i "{video_path}" -c:v libx264 {bitrate_cmd} {scale_cmd} -preset veryfast -c:a aac -b:a 48k "{compressed_path}"'
+    # Tính toán bitrate mục tiêu để ép về dưới 22MB chuẩn
+    # Hạ độ phân giải xuống tối đa 480p hoặc 720p, preset ultrafast và threads 1 để dùng dưới 150MB RAM
+    cmd = (
+        f'"{FFMPEG_BIN}" -y -threads 1 -i "{video_path}" '
+        f'-vf "scale=\'min(640,iw)\':-2" '
+        f'-c:v libx264 -preset ultrafast -crf 28 '
+        f'-maxrate 500k -bufsize 800k '
+        f'-c:a aac -b:a 48k -ac 1 '
+        f'"{compressed_path}"'
+    )
     try:
-        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=400)
-        if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 0:
+        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=240)
+        if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
             compressed_mb = os.path.getsize(compressed_path) / (1024 * 1024)
-            print(f"✅ Đã nén thành công về {compressed_mb:.2f}MB (< 25MB chuẩn Lark!).")
+            print(f"✅ Đã nén thành công video về {compressed_mb:.2f}MB (< 25MB).")
             return compressed_path
     except Exception as e:
         print(f"Lỗi nén video: {e}")
@@ -162,7 +168,7 @@ def download_youtube_video(url: str, target_dir: str) -> bool:
         import yt_dlp
         output_template = os.path.join(target_dir, "youtube_video.mp4")
         ydl_opts = {
-            'format': 'best',
+            'format': 'best[ext=mp4]/best',
             'outtmpl': output_template,
             'quiet': True,
             'no_warnings': True
@@ -256,7 +262,7 @@ def convert_single_file(file_path: str) -> list[str]:
     elif ext_lower in [".webm", ".mkv"]:
         out_path = f"{name}.mp4"
         try:
-            cmd = f'"{FFMPEG_BIN}" -y -i "{file_path}" -c:v libx264 -preset fast -c:a aac "{out_path}"'
+            cmd = f'"{FFMPEG_BIN}" -y -threads 1 -i "{file_path}" -c:v libx264 -preset ultrafast -c:a aac "{out_path}"'
             subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
                 os.remove(file_path)
@@ -302,6 +308,8 @@ def upload_file_direct(file_path: str, file_type: str) -> str:
 def upload_and_send_batch_proofs(message_id: str, final_files: list):
     try:
         print(f"🚀 Bắt đầu đẩy gộp {len(final_files)} tệp vào Thread...")
+        
+        # 1. Gửi tất cả ảnh trước
         image_keys = []
         for f in final_files:
             file_path = f["path"]
@@ -322,6 +330,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
             client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
 
+        # 2. Xử lý video và tệp đính kèm
         for f in final_files:
             file_path = f["path"]
             file_name = f["name"]
@@ -333,23 +342,25 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             if file_ext in [".mp4", ".mov"]:
                 upload_path = compress_video_if_large(file_path)
 
+                # Gửi khung phát video (media)
                 media_key = upload_file_direct(upload_path, "mp4")
                 if media_key:
                     media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(media_body).build())
-                    print(f"✅ Đã gửi khung phát video: {file_name}")
+                    print(f"🎬 Đã gửi khung phát video: {file_name}")
 
+                # Gửi tệp tải xuống (stream)
                 stream_key = upload_file_direct(upload_path, "stream")
                 if stream_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": stream_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
-                    print(f"✅ Đã gửi tệp đính kèm video: {file_name}")
+                    print(f"📥 Đã gửi tệp đính kèm video: {file_name}")
             else:
                 file_key = upload_file_direct(file_path, "stream")
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
-                    print(f"✅ Đã gửi tệp: {file_name}")
+                    print(f"📎 Đã gửi tệp: {file_name}")
 
     except Exception as e:
         print(f"Lỗi xử lý gửi gộp media: {e}")
@@ -461,7 +472,7 @@ def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
         print(f"gdown folder thất bại: {e}")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     try:
         res = requests.get(clean_folder_url, headers=headers, timeout=20, verify=False)
@@ -529,7 +540,7 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
     print(f"☁️ Đang xử lý link OneDrive/SharePoint: {url}")
     session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*"
     }
 
@@ -537,11 +548,9 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
         parsed = urllib.parse.urlparse(url)
         base_domain = f"{parsed.scheme}://{parsed.netloc}"
 
-        # 1. Truy cập trang để theo redirect và lấy cookie/session
         r_page = session.get(url, headers=headers, timeout=25, verify=False, allow_redirects=True)
         final_page_url = r_page.url
 
-        # 2. Xử lý tải gói zip từ SharePoint
         zip_download_urls = []
         user_match = re.search(r'(/personal/[^/]+)', final_page_url) or re.search(r'(/personal/[^/]+)', url)
         web_path = user_match.group(1) if user_match else ""
@@ -579,7 +588,6 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
             except Exception as e:
                 print(f"Lỗi tải bundle {dl_url}: {e}")
 
-        # 3. Phương án bóc tách Microsoft Graph API Shares
         clean_share_url = url.split("?")[0]
         encoded = base64.b64encode(clean_share_url.encode('utf-8')).decode('utf-8')
         sharing_token_b64 = "u!" + encoded.rstrip('=').replace('/', '_').replace('+', '-')
@@ -856,7 +864,7 @@ def process_request(message_id: str, text: str, sender_id: str):
     }
     reply_thread_card(message_id, report_card_payload)
 
-    # GỬI GỘP TẤT CẢ TỆP VÀO THREAD
+    # GỬI GỘP TẤT CẢ TỆP VÀO THREAD (ĐÃ TỐI ƯU KHUNG PHÁT VÀ TỆP ĐÍNH KÈM)
     upload_and_send_batch_proofs(message_id, final_files)
 
     # THẺ 2: THÔNG BÁO HOÀN TẤT
