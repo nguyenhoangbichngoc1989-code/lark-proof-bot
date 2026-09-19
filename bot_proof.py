@@ -16,6 +16,8 @@ import base64
 import http.server
 import socketserver
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import *
 import urllib3
@@ -35,6 +37,13 @@ HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
 FFMPEG_BIN = "ffmpeg"
 
 PROCESSED_MESSAGES = set()
+
+# Khởi tạo Session toàn cục với Connection Pooling để tái sử dụng kết nối mạng siêu tốc
+global_session = requests.Session()
+retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+adapter = HTTPAdapter(pool_connections=20, pool_maxsize=50, max_retries=retries)
+global_session.mount("https://", adapter)
+global_session.mount("http://", adapter)
 
 client = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).domain(lark.LARK_DOMAIN).build()
 
@@ -90,7 +99,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def clean_file_display_name(filename: str) -> str:
@@ -108,7 +117,7 @@ def sanitize_filename(filename: str) -> str:
 def get_tenant_access_token() -> str:
     try:
         url = "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal"
-        res = requests.post(url, json={"app_id": APP_ID, "app_secret": APP_SECRET}, timeout=15)
+        res = global_session.post(url, json={"app_id": APP_ID, "app_secret": APP_SECRET}, timeout=10)
         if res.status_code == 200:
             return res.json().get("tenant_access_token", "")
     except Exception as e:
@@ -132,27 +141,28 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VIDEO TIẾT KIỆM RAM CHO RENDER -----------------
+# ----------------- NÉN VIDEO TỐC ĐỘ CAO & TIẾT KIỆM RAM -----------------
 def compress_video_if_large(video_path: str) -> str:
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
     if size_mb <= 26.0:
         return video_path
 
-    print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) đang nén siêu tiết kiệm RAM...")
+    print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) đang nén siêu tốc...")
     name, ext = os.path.splitext(video_path)
     compressed_path = f"{name}_compressed.mp4"
 
+    # Tối ưu hóa: ultrafast + fastdecode + scale 480p + 2 luồng CPU ảo Render
     cmd = (
-        f'"{FFMPEG_BIN}" -y -threads 1 -i "{video_path}" '
+        f'"{FFMPEG_BIN}" -y -threads 2 -i "{video_path}" '
         f'-vf "scale=\'min(480,iw)\':-2" '
-        f'-c:v libx264 -preset ultrafast '
-        f'-x264opts "rc-lookahead=5:bframes=0:sliced-threads=0" '
-        f'-b:v 450k -maxrate 600k -bufsize 600k '
-        f'-c:a aac -b:a 40k -ac 1 '
+        f'-c:v libx264 -preset ultrafast -tune fastdecode '
+        f'-x264opts "rc-lookahead=5:bframes=0" '
+        f'-b:v 400k -maxrate 550k -bufsize 600k '
+        f'-c:a aac -b:a 32k -ac 1 '
         f'"{compressed_path}"'
     )
     try:
-        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=240)
         gc.collect()
         if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
             compressed_mb = os.path.getsize(compressed_path) / (1024 * 1024)
@@ -202,7 +212,7 @@ def convert_single_file(file_path: str) -> list[str]:
         out_path = f"{name}.jpg"
         try:
             with Image.open(file_path) as img:
-                img.convert("RGB").save(out_path, "JPEG", quality=95)
+                img.convert("RGB").save(out_path, "JPEG", quality=90)
             os.remove(file_path)
             print(f"🖼️ Đã chuyển đổi tệp {os.path.basename(file_path)} (.jfif) sang định dạng JPEG!")
             return [out_path]
@@ -239,7 +249,7 @@ def convert_single_file(file_path: str) -> list[str]:
             import pypdfium2 as pdfium
             pdf = pdfium.PdfDocument(file_path)
             for i, page in enumerate(pdf):
-                image = page.render(scale=2).to_pil()
+                image = page.render(scale=1.5).to_pil()
                 page_path = f"{name}_trang_{i+1}.png"
                 image.save(page_path, "PNG")
                 converted_files.append(page_path)
@@ -254,7 +264,7 @@ def convert_single_file(file_path: str) -> list[str]:
         out_path = f"{name}.jpg"
         try:
             with Image.open(file_path) as img:
-                img.convert("RGB").save(out_path, "JPEG", quality=95)
+                img.convert("RGB").save(out_path, "JPEG", quality=90)
             os.remove(file_path)
             return [out_path]
         except Exception:
@@ -263,7 +273,7 @@ def convert_single_file(file_path: str) -> list[str]:
     elif ext_lower in [".webm", ".mkv"]:
         out_path = f"{name}.mp4"
         try:
-            cmd = f'"{FFMPEG_BIN}" -y -threads 1 -i "{file_path}" -c:v libx264 -preset ultrafast -c:a aac "{out_path}"'
+            cmd = f'"{FFMPEG_BIN}" -y -threads 2 -i "{file_path}" -c:v libx264 -preset ultrafast -c:a aac "{out_path}"'
             subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
                 os.remove(file_path)
@@ -293,7 +303,7 @@ def upload_file_direct(file_path: str, file_type: str) -> str:
     try:
         with open(file_path, "rb") as f:
             files = {"file": (safe_name, f)}
-            res = requests.post(url, headers=headers, data=data, files=files, timeout=300)
+            res = global_session.post(url, headers=headers, data=data, files=files, timeout=300)
             if res.status_code == 200:
                 body = res.json()
                 if body.get("code") == 0:
@@ -310,7 +320,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
     try:
         print(f"🚀 Bắt đầu đẩy gộp {len(final_files)} tệp vào Thread...")
         
-        # 1. Gửi ảnh
+        # 1. Gửi ảnh trước
         image_keys = []
         for f in final_files:
             file_path = f["path"]
@@ -331,7 +341,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
             client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
 
-        # 2. Gửi video và các tệp khác
+        # 2. Xử lý video và các tệp đính kèm
         for f in final_files:
             file_path = f["path"]
             file_name = f["name"]
@@ -368,11 +378,11 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
     except Exception as e:
         print(f"Lỗi xử lý gửi gộp media: {e}")
 
-# ----------------- TẢI FILE GOOGLE DRIVE (TỐI ƯU FILE LỚN TRÊN 25MB) -----------------
+# ----------------- TẢI GOOGLE DRIVE TỐC ĐỘ CAO (BUFFER 4MB) -----------------
 def check_gdrive_error(url: str) -> bool:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        res = requests.get(url, headers=headers, timeout=10, verify=False)
+        res = global_session.get(url, headers=headers, timeout=10, verify=False)
         text = res.text
         return ("không thể mở tệp tại thời điểm này" in text or "unable to open the file at this time" in text.lower())
     except Exception:
@@ -383,7 +393,7 @@ def resolve_proof_url(url: str) -> str:
         return url
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
-        r = requests.get(url, headers=headers, allow_redirects=True, timeout=15, verify=False)
+        r = global_session.get(url, headers=headers, allow_redirects=True, timeout=15, verify=False)
         if r.url != url and "bom.so" not in r.url:
             return r.url
         html = r.text
@@ -405,15 +415,14 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     save_name = preferred_name or f"gdrive_{file_id}.mp4"
     save_path = os.path.join(target_dir, save_name)
 
-    # 1. Tải qua Session với token xác nhận quét virus tự động
-    session = requests.Session()
+    # 1. Tải siêu tốc qua Session (Buffer 4MB) với xác nhận quét virus tự động
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*"
     }
     try:
         url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        res = session.get(url, headers=headers, stream=True, verify=False, timeout=60)
+        res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=45)
         
         confirm_token = None
         for k, v in res.cookies.items():
@@ -431,20 +440,21 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
         if confirm_token:
             url = f"https://drive.google.com/uc?export=download&confirm={confirm_token}&id={file_id}"
-            res = session.get(url, headers=headers, stream=True, verify=False, timeout=180)
+            res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=180)
 
         if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", ""):
+            # Tăng buffer lên 4MB để tối ưu I/O ghi đĩa
             with open(save_path, "wb") as f:
-                for chunk in res.iter_content(chunk_size=1024 * 1024):
+                for chunk in res.iter_content(chunk_size=4 * 1024 * 1024):
                     if chunk:
                         f.write(chunk)
             if os.path.exists(save_path) and os.path.getsize(save_path) > 2000:
-                print(f"📥 Tải thành công tệp GDrive (Session): {save_name} ({format_size(os.path.getsize(save_path))})")
+                print(f"📥 Tải siêu tốc tệp GDrive: {save_name} ({format_size(os.path.getsize(save_path))})")
                 return True
     except Exception as e:
-        print(f"Lỗi Session download: {e}")
+        print(f"Lỗi tải Session: {e}")
 
-    # 2. Thử tải bằng gdown qua ID
+    # 2. Thử bằng gdown qua ID
     try:
         import gdown
         output = gdown.download(id=file_id, output=save_path, quiet=False)
@@ -454,7 +464,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"gdown id thất bại: {e}")
 
-    # 3. Thử tải bằng gdown qua URL trực tiếp
+    # 3. Thử bằng gdown qua URL
     try:
         import gdown
         url = f"https://drive.google.com/uc?id={file_id}"
@@ -486,7 +496,7 @@ def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     try:
-        res = requests.get(clean_folder_url, headers=headers, timeout=20, verify=False)
+        res = global_session.get(clean_folder_url, headers=headers, timeout=20, verify=False)
         if res.status_code == 200:
             html = res.text
             found_files = {}
@@ -549,7 +559,6 @@ def extract_all_zips(target_dir: str):
 
 def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
     print(f"☁️ Đang xử lý link OneDrive/SharePoint: {url}")
-    session = requests.Session()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*"
@@ -559,7 +568,7 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
         parsed = urllib.parse.urlparse(url)
         base_domain = f"{parsed.scheme}://{parsed.netloc}"
 
-        r_page = session.get(url, headers=headers, timeout=25, verify=False, allow_redirects=True)
+        r_page = global_session.get(url, headers=headers, timeout=25, verify=False, allow_redirects=True)
         final_page_url = r_page.url
 
         zip_download_urls = []
@@ -582,12 +591,12 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
         for dl_url in zip_download_urls:
             try:
                 bundle_path = os.path.join(target_dir, "share_bundle.zip")
-                b_res = session.get(dl_url, headers=headers, stream=True, timeout=120, verify=False)
+                b_res = global_session.get(dl_url, headers=headers, stream=True, timeout=120, verify=False)
                 if b_res.status_code == 200:
                     c_type = b_res.headers.get("Content-Type", "").lower()
                     if "text/html" not in c_type:
                         with open(bundle_path, "wb") as f:
-                            for chunk in b_res.iter_content(chunk_size=1024 * 1024):
+                            for chunk in b_res.iter_content(chunk_size=4 * 1024 * 1024):
                                 if chunk:
                                     f.write(chunk)
                         if os.path.exists(bundle_path) and os.path.getsize(bundle_path) > 500 and zipfile.is_zipfile(bundle_path):
@@ -610,7 +619,7 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
 
         for ep in api_endpoints:
             try:
-                res = session.get(ep, headers={**headers, "Accept": "application/json"}, timeout=20, verify=False)
+                res = global_session.get(ep, headers={**headers, "Accept": "application/json"}, timeout=20, verify=False)
                 if res.status_code == 200:
                     data = res.json()
                     items = data.get("value", [])
@@ -621,10 +630,10 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
                             dl_url = it.get("@microsoft.graph.downloadUrl") or it.get("@content.downloadUrl")
                             if dl_url:
                                 save_p = os.path.join(target_dir, fname)
-                                f_res = session.get(dl_url, headers=headers, stream=True, timeout=90, verify=False)
+                                f_res = global_session.get(dl_url, headers=headers, stream=True, timeout=90, verify=False)
                                 if f_res.status_code == 200:
                                     with open(save_p, "wb") as f:
-                                        for chunk in f_res.iter_content(chunk_size=1024 * 1024):
+                                        for chunk in f_res.iter_content(chunk_size=4 * 1024 * 1024):
                                             if chunk:
                                                 f.write(chunk)
                                     print(f"📥 Tải thành công: {fname} ({format_size(os.path.getsize(save_p))})")
@@ -651,7 +660,7 @@ def download_proof(url: str, target_dir: str) -> bool:
         if match:
             doc_id = match.group(1)
             export_url = f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=xlsx"
-            res = requests.get(export_url, verify=False)
+            res = global_session.get(export_url, verify=False)
             if res.status_code == 200:
                 with open(os.path.join(target_dir, f"Sheet_{doc_id[:8]}.xlsx"), "wb") as f:
                     f.write(res.content)
@@ -662,7 +671,7 @@ def download_proof(url: str, target_dir: str) -> bool:
         if match:
             doc_id = match.group(1)
             export_url = f"https://docs.google.com/document/d/{doc_id}/export?format=docx"
-            res = requests.get(export_url, verify=False)
+            res = global_session.get(export_url, verify=False)
             if res.status_code == 200:
                 with open(os.path.join(target_dir, f"Doc_{doc_id[:8]}.docx"), "wb") as f:
                     f.write(res.content)
@@ -684,7 +693,7 @@ def download_proof(url: str, target_dir: str) -> bool:
 
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        res = requests.get(final_url, headers=headers, stream=True, timeout=90, verify=False)
+        res = global_session.get(final_url, headers=headers, stream=True, timeout=90, verify=False)
         if res.status_code == 200:
             c_type = res.headers.get("content-type", "")
             if "text/html" in c_type and not any(ext in final_url.lower() for ext in [".mp4", ".png", ".jpg", ".mov", ".jfif"]):
@@ -702,7 +711,7 @@ def download_proof(url: str, target_dir: str) -> bool:
 
             save_path = os.path.join(target_dir, filename)
             with open(save_path, "wb") as f:
-                for chunk in res.iter_content(chunk_size=1024 * 1024):
+                for chunk in res.iter_content(chunk_size=4 * 1024 * 1024):
                     if chunk:
                         f.write(chunk)
             print(f"📥 Đã tải thành công: {filename}")
@@ -825,14 +834,13 @@ def process_request(message_id: str, text: str, sender_id: str):
 
     # THẺ 1: BÁO CÁO BAN ĐẦU
     card_element_top = (
-        f"🎫<text_tag color='turquoise'>𝐓𝐢𝐜𝐤𝐞𝐭_𝐈𝐃:</text_tag> {ticket_id}\n"
-        f"💾<text_tag color='carmine'>ᴛᴏᴛᴀʟ ғɪʟᴇ sɪᴢᴇ:</text_tag> {format_size(total_size)}\n"
-        f"   ╰┄▸<text_tag color='carmine'>𝐀𝐭𝐭𝐚𝐜𝐡𝐦𝐞𝐧𝐭𝐬: </text_tag> {len(final_files)}/{len(final_files)}\n\n"
+        f"🎫 {ticket_id}\n"
+        f" ╰┄▸💾 {format_size(total_size)}\n"
+        f"     ╰┄▸🗂 {len(final_files)}/{len(final_files)}\n\n"
         f"{type_content}\n\n"
-        f"      <text_tag color='yellow'>   ⇓ ⇓ ⇓   </text_tag>"
     )
 
-    loading_styled = "⏳ <text_tag color='yellow'> 𝐥 𝐨 𝐚 𝐝 𝐢 𝐧 𝐠 ..... </text_tag>"
+    loading_styled = "⏳ <font color='yellow'> 𝐥 𝐨 𝐚 𝐝 𝐢 𝐧 𝐠 ..... </font>"
     right_badge_styled = f"<text_tag color='turquoise'>✎ᝰ┆</text_tag> <text_tag color='carmine'>[№ {req_count}]</text_tag>"
 
     report_card_payload = {
@@ -886,8 +894,8 @@ def process_request(message_id: str, text: str, sender_id: str):
     )
 
     title_side_md = (
-        "<text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n"
-        "<text_tag color='turquoise'>-ˋˏ   𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
+        "       <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n"
+        "<text_tag color='turquoise'>-ˋˏ   𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎F ˎˊ-</text_tag>"
     )
 
     at_middle_md = (
@@ -896,7 +904,7 @@ def process_request(message_id: str, text: str, sender_id: str):
     )
 
     thankyou_center_md = (
-        "┊t h a n k y o u┊\n"
+        "<font color='turquoise'> ┊t h a n k y o u┊</font>"\n"
         "<font color='turquoise'>┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
     )
 
@@ -974,7 +982,7 @@ def handle_message_update(data) -> None:
 
 def start_bot():
     print("=" * 60)
-    print("🚀 BOT LARK PROOF (PHIÊN BẢN CLOUD BẢO MẬT 2026)...")
+    print("🚀 BOT LARK PROOF (PHIÊN BẢN CLOUD TĂNG TỐC 2026)...")
     print("=" * 60)
     
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
