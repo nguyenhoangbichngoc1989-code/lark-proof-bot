@@ -34,9 +34,6 @@ ERROR_IMG_PATH = os.path.join(BASE_DIR, "gdrive_error.png")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
 FFMPEG_BIN = "ffmpeg"
 
-# Giới hạn dung lượng tải về an toàn cho Render Free Tier (350 MB)
-MAX_SAFE_DOWNLOAD_MB = 350
-
 PROCESSED_MESSAGES = set()
 
 client = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).domain(lark.LARK_DOMAIN).build()
@@ -135,7 +132,7 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VIDEO VỀ DƯỚI 25MB (TỐI ƯU RAM) -----------------
+# ----------------- NÉN VIDEO VỀ DƯỚI 25MB (TIẾT KIỆM RAM) -----------------
 def compress_video_if_large(video_path: str) -> str:
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
     if size_mb <= 27.0:
@@ -148,7 +145,6 @@ def compress_video_if_large(video_path: str) -> str:
     scale_cmd = '-vf "scale=\'min(720,iw)\':-2"'
     bitrate_cmd = '-b:v 600k -maxrate 800k -bufsize 1000k'
 
-    # Dùng threads 1 để không nuốt cạn RAM của Render
     cmd = f'"{FFMPEG_BIN}" -y -threads 1 -i "{video_path}" -c:v libx264 {bitrate_cmd} {scale_cmd} -preset veryfast -c:a aac -b:a 48k "{compressed_path}"'
     try:
         subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=400)
@@ -454,37 +450,59 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     return False
 
 def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
+    print(f"📂 Đang xử lý tải Folder Google Drive: {folder_url}")
+    folder_match = re.search(r'/folders/([a-zA-Z0-9_-]+)', folder_url)
+    folder_id = folder_match.group(1) if folder_match else ""
+    clean_folder_url = f"https://drive.google.com/drive/folders/{folder_id}" if folder_id else folder_url.split("?")[0]
+
+    # 1. Thử dùng tính năng chuyên dụng download_folder của gdown
+    try:
+        import gdown
+        downloaded = gdown.download_folder(clean_folder_url, output=target_dir, quiet=False, use_cookies=False)
+        if downloaded and len(downloaded) > 0:
+            print(f"✅ [gdown] Đã tải thành công {len(downloaded)} tệp từ thư mục Google Drive!")
+            return True
+    except Exception as e:
+        print(f"gdown folder thất bại: {e}")
+
+    # 2. Phương án bóc tách file ID từ HTML thư mục
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     }
     try:
-        res = requests.get(folder_url, headers=headers, timeout=20, verify=False)
-        if res.status_code != 200:
-            return False
+        res = requests.get(clean_folder_url, headers=headers, timeout=20, verify=False)
+        if res.status_code == 200:
+            html = res.text
+            found_files = {}
 
-        html = res.text
-        found_files = {}
-
-        matches = re.findall(r'\["([a-zA-Z0-9_-]{28,45})",\["([^"]+)"', html)
-        for fid, fname in matches:
-            fname_clean = clean_file_display_name(fname)
-            if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".avi", ".mkv", ".jpg", ".png", ".jpeg", ".webp", ".pdf"]):
-                found_files[fid] = fname_clean
-
-        if not found_files:
-            matches_alt = re.findall(r'\["([a-zA-Z0-9_-]{28,45})","([^"]+)"', html)
-            for fid, fname in matches_alt:
+            matches = re.findall(r'\["([a-zA-Z0-9_-]{28,45})",\["([^"]+)"', html)
+            for fid, fname in matches:
                 fname_clean = clean_file_display_name(fname)
-                if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".jpg", ".png", ".jpeg", ".webp", ".pdf"]):
+                if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".avi", ".mkv", ".jpg", ".png", ".jpeg", ".webp", ".pdf"]):
                     found_files[fid] = fname_clean
 
-        if found_files:
-            print(f"📂 Đã tìm thấy {len(found_files)} tệp trong Folder Google Drive. Đang tải...")
-            success_count = 0
-            for fid, fname in found_files.items():
-                if download_single_gdrive_file(fid, target_dir, fname):
-                    success_count += 1
-            return success_count > 0
+            if not found_files:
+                matches_alt = re.findall(r'\["([a-zA-Z0-9_-]{28,45})","([^"]+)"', html)
+                for fid, fname in matches_alt:
+                    fname_clean = clean_file_display_name(fname)
+                    if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".jpg", ".png", ".jpeg", ".webp", ".pdf"]):
+                        found_files[fid] = fname_clean
+
+            if not found_files:
+                raw_ids = set(re.findall(r'["\']([a-zA-Z0-9_-]{28,40})["\']', html))
+                idx = 1
+                for rid in raw_ids:
+                    if rid != folder_id:
+                        found_files[rid] = f"gdrive_item_{idx}"
+                        idx += 1
+
+            if found_files:
+                print(f"📂 Đã tìm thấy {len(found_files)} tệp trong Folder Google Drive. Đang tải...")
+                success_count = 0
+                for fid, fname in found_files.items():
+                    if download_single_gdrive_file(fid, target_dir, fname):
+                        success_count += 1
+                return success_count > 0
 
     except Exception as e:
         print(f"Lỗi phân tích Folder GDrive: {e}")
@@ -517,17 +535,50 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
     print(f"☁️ Đang xử lý link OneDrive/SharePoint: {url}")
     session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*"
     }
 
     try:
+        parsed = urllib.parse.urlparse(url)
+        base_domain = f"{parsed.scheme}://{parsed.netloc}"
+
+        zip_download_urls = []
+        if "download=1" not in url:
+            sep = "&" if "?" in url else "?"
+            zip_download_urls.append(f"{url}{sep}download=1")
+        else:
+            zip_download_urls.append(url)
+
+        user_match = re.search(r'(/personal/[^/]+)', url)
+        web_path = user_match.group(1) if user_match else ""
+        token_match = re.search(r'/:f:/p/[^/]+/([a-zA-Z0-9_-]+)', url)
+        if token_match and web_path:
+            zip_download_urls.append(f"{base_domain}{web_path}/_layouts/15/download.aspx?share={token_match.group(1)}")
+
+        for dl_url in zip_download_urls:
+            try:
+                bundle_path = os.path.join(target_dir, "share_bundle.zip")
+                b_res = session.get(dl_url, headers=headers, stream=True, timeout=120, verify=False)
+                if b_res.status_code == 200:
+                    c_type = b_res.headers.get("Content-Type", "").lower()
+                    if "text/html" not in c_type:
+                        with open(bundle_path, "wb") as f:
+                            for chunk in b_res.iter_content(chunk_size=1024 * 1024):
+                                if chunk:
+                                    f.write(chunk)
+                        if os.path.exists(bundle_path) and os.path.getsize(bundle_path) > 500 and zipfile.is_zipfile(bundle_path):
+                            print(f"✅ Đã tải gói thư mục thành công ({format_size(os.path.getsize(bundle_path))})")
+                            extract_all_zips(target_dir)
+                            return len(os.listdir(target_dir)) > 0
+                        elif os.path.exists(bundle_path) and os.path.getsize(bundle_path) > 500:
+                            return True
+            except Exception as e:
+                print(f"Lỗi tải bundle {dl_url}: {e}")
+
         clean_share_url = url.split("?")[0]
         encoded = base64.b64encode(clean_share_url.encode('utf-8')).decode('utf-8')
         sharing_token = "u!" + encoded.rstrip('=').replace('/', '_').replace('+', '-')
-
-        parsed = urllib.parse.urlparse(url)
-        base_domain = f"{parsed.scheme}://{parsed.netloc}"
 
         api_endpoints = [
             f"{base_domain}/_api/v2.0/shares/{sharing_token}/driveItem/children",
@@ -560,39 +611,6 @@ def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
                             return True
             except Exception as e:
                 print(f"Thử API {ep} lỗi: {e}")
-
-        r_page = session.get(url, headers=headers, timeout=20, verify=False, allow_redirects=True)
-        final_page_url = r_page.url
-        user_match = re.search(r'(/personal/[^/]+)', final_page_url)
-        web_path = user_match.group(1) if user_match else ""
-
-        token_match = re.search(r'/:f:/p/[^/]+/([a-zA-Z0-9_-]+)', url)
-        share_token_simple = token_match.group(1) if token_match else None
-
-        zip_download_urls = []
-        if share_token_simple and web_path:
-            zip_download_urls.append(f"{base_domain}{web_path}/_layouts/15/download.aspx?share={share_token_simple}")
-        if "download=1" not in final_page_url:
-            sep = "&" if "?" in final_page_url else "?"
-            zip_download_urls.append(f"{final_page_url}{sep}download=1")
-
-        for dl_url in zip_download_urls:
-            try:
-                bundle_path = os.path.join(target_dir, "share_bundle.zip")
-                b_res = session.get(dl_url, headers=headers, stream=True, timeout=120, verify=False)
-                if b_res.status_code == 200:
-                    c_type = b_res.headers.get("Content-Type", "").lower()
-                    if "text/html" not in c_type:
-                        with open(bundle_path, "wb") as f:
-                            for chunk in b_res.iter_content(chunk_size=1024 * 1024):
-                                if chunk:
-                                    f.write(chunk)
-                        if os.path.exists(bundle_path) and os.path.getsize(bundle_path) > 500 and zipfile.is_zipfile(bundle_path):
-                            print(f"✅ Đã tải gói thư mục thành công ({format_size(os.path.getsize(bundle_path))})")
-                            extract_all_zips(target_dir)
-                            return len(os.listdir(target_dir)) > 0
-            except Exception as e:
-                print(f"Lỗi tải bundle {dl_url}: {e}")
 
     except Exception as e:
         print(f"Lỗi xử lý OneDrive / SharePoint: {e}")
