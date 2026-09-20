@@ -826,11 +826,11 @@ def process_request(message_id: str, text: str, sender_id: str):
     card_element_top = (
         f"🎫 {ticket_id}\n"
         f" ╰┄▸💾 {format_size(total_size)}\n"
-        f"     ╰┄▸🗂 {len(final_files)}/{len(final_files)}\n\n"
+        f"     ╰┄▸📑 {len(final_files)}/{len(final_files)}\n\n"
         f"{type_content}\n\n"
     )
 
-    loading_styled = "⏳ <font color='yellow'> 𝐥 𝐨 𝐚 𝐝 𝐢 𝐧 𝐠 ..... </font>"
+    loading_styled = ## "⏳️ <font color='yellow'> 𝐥 𝐨 𝐚 𝐝 𝐢 𝐧 𝐠 ..... </font>"
     right_badge_styled = f"<text_tag color='turquoise'>✎ᝰ┆</text_tag> <text_tag color='carmine'>[№ {req_count}]</text_tag>"
 
     report_card_payload = {
@@ -889,8 +889,8 @@ def process_request(message_id: str, text: str, sender_id: str):
     )
 
     at_middle_md = (
-        f"<text_tag color='carmine'>♡</text_tag> <at id=\"{sender_id}\"></at> ơi...\n"
-        f"    ╰┄▸<text_tag color='turquoise'>Ticket_ID</text_tag>_<text_tag color='carmine'>『{ticket_id}』</text_tag>"
+        f"### <font color='carmine'>♡</font> <at id=\"{sender_id}\"></at> ơi...\n"
+        f"    ╰┄▸🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*\n"
     )
 
     thankyou_center_md = (
