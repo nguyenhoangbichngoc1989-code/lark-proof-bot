@@ -50,10 +50,71 @@ def run_dummy_server():
     server.serve_forever()
 
 # ==========================================
-# 3. HÀM GỬI TIN NHẮN & BÓC TÁCH RICH TEXT
+# 3. HÀM GỬI THẺ TƯƠNG TÁC (INTERACTIVE CARD) ĐẦY ĐỦ CHI TIẾT FILE
 # ==========================================
+def send_detailed_card(receive_id: str, receive_id_type: str, order_id: str, file_name: str, file_size_mb: float):
+    """Gửi Thẻ tương tác chứa thông tin mã đơn, tên file, dung lượng và nút Transfer Proof"""
+    try:
+        card_content = {
+            "config": {"wide_screen_mode": True},
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": "🎫 **{order_id}**\n—> 💾 **{file_size} MB**\n—> 📄 1/1".format(order_id=order_id, file_size=file_size_mb)
+                    }
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": "• 🎬 : 1 file\n  • {file_name}: [{file_size} MB]".format(file_name=file_name, file_size=file_size_mb)
+                    }
+                },
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": "⏳ *l o a d i n g .....*"
+                    }
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "action",
+                    "actions": [
+                        {
+                            "tag": "button",
+                            "text": {
+                                "tag": "plain_text",
+                                "content": "🚀 Transfer Proof"
+                            },
+                            "type": "primary",
+                            "value": {"action": "transfer_proof", "order_id": order_id}
+                        }
+                    ]
+                }
+            ]
+        }
+
+        req = CreateMessageRequest.builder() \
+            .receive_id_type(receive_id_type) \
+            .request_body(CreateMessageRequestBody.builder()
+                          .receive_id(receive_id)
+                          .msg_type("interactive")
+                          .content(json.dumps(card_content))
+                          .build()) \
+            .build()
+        
+        resp = client.im.v1.message.create(req)
+        if not resp.success():
+            print(f"Gui card that bai: code={resp.code}, msg={resp.msg}")
+    except Exception as e:
+        print(f"Loi gui interactive card: {e}")
+
 def send_text_msg(receive_id: str, receive_id_type: str, content_text: str):
-    """Gửi tin nhắn phản hồi qua Lark Open API"""
+    """Gửi tin nhắn văn bản thông thường"""
     try:
         content_dict = {"text": content_text}
         req = CreateMessageRequest.builder() \
@@ -64,26 +125,25 @@ def send_text_msg(receive_id: str, receive_id_type: str, content_text: str):
                           .content(json.dumps(content_dict))
                           .build()) \
             .build()
-        
-        resp = client.im.v1.message.create(req)
-        if not resp.success():
-            print(f"Gui tin nhan that bai: code={resp.code}, msg={resp.msg}")
+        client.im.v1.message.create(req)
     except Exception as e:
-        print(f"Loi ngoai le khi gui tin nhan: {e}")
+        print(f"Loi gui text: {e}")
 
+# ==========================================
+# 4. BÓC TÁCH VÀ TẢI FILE TỪ GOOGLE DRIVE
+# ==========================================
 def extract_clean_text(message_dict: dict):
-    """Bóc tách text sạch từ text thường và post rich text có mention"""
+    """Bóc tách text sạch từ tin nhắn text hoặc post rich text"""
     msg_type = message_dict.get("message_type", "")
     content_raw = message_dict.get("content", "{}")
-    mentions_found = []
     
     try:
         content_json = json.loads(content_raw)
     except Exception:
-        return "", []
+        return ""
 
     if msg_type == "text":
-        return content_json.get("text", ""), []
+        return content_json.get("text", "")
 
     if msg_type == "post":
         extracted_pieces = []
@@ -96,66 +156,36 @@ def extract_clean_text(message_dict: dict):
             for item in p:
                 tag = item.get("tag")
                 if tag in ["text", "a"]:
-                    text_val = item.get("text", "") or item.get("href", "")
-                    extracted_pieces.append(text_val)
-                elif tag == "at":
-                    uid = item.get("user_id", "")
-                    uname = item.get("user_name", "")
-                    if uid:
-                        mentions_found.append(uid)
-                    extracted_pieces.append(f"@{uname or uid}")
-                    
-        return " ".join(extracted_pieces), mentions_found
+                    extracted_pieces.append(item.get("text", "") or item.get("href", ""))
+        return " ".join(extracted_pieces)
 
-    return "", []
+    return ""
 
-# ==========================================
-# 4. BỘ GIẢI MÃ LINK TRUNG GIAN & TẢI DRIVE TỰ ĐỘNG
-# ==========================================
 def resolve_target_url(short_url: str) -> str:
     """Giải mã link rút gọn acesse.one / encurtador.dev để lấy link Google Drive thật"""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
     try:
         session = requests.Session()
         res = session.get(short_url, headers=headers, timeout=15, allow_redirects=True)
-        final_url = res.url
-        
-        if "drive.google.com" in final_url:
-            return final_url
+        if "drive.google.com" in res.url:
+            return res.url
 
-        html_text = res.text
-
-        # 1. Tìm URL Google Drive trong HTML
-        drive_links = re.findall(r'https://drive\.google\.com/[^\s"\'<>]+', html_text)
+        drive_links = re.findall(r'https://drive\.google\.com/[^\s"\'<>]+', res.text)
         if drive_links:
-            clean_link = drive_links[0].replace(r'\/', '/').rstrip('\\')
-            return clean_link
+            return drive_links[0].replace(r'\/', '/').rstrip('\\')
 
-        # 2. Tìm trong nút Go to destination
-        destination_matches = re.findall(r'href=["\'](https?://[^"\']+)["\'][^>]*>[\s\r\n]*Go to destination', html_text, re.IGNORECASE)
-        if destination_matches:
-            return destination_matches[0]
-
-        # 3. Tìm link chuyển hướng window.location
-        redirect_matches = re.findall(r'(?:window\.location(?:\.href)?|url)\s*=\s*["\'](https?://[^"\']+)["\']', html_text, re.IGNORECASE)
-        for cand in redirect_matches:
-            if "encurtador" not in cand and "acesse.one" not in cand:
-                return cand
-
-        return final_url
+        return res.url
     except Exception as e:
         print(f"Loi phan giai link: {e}")
         return short_url
 
 def download_file_proof(raw_url: str, output_path: str) -> bool:
-    """Tải tệp video từ Google Drive hoặc link trực tiếp"""
+    """Tải tệp video từ Google Drive (hỗ trợ xác nhận file lớn)"""
     real_url = resolve_target_url(raw_url)
-    print(f"🔗 Link dich sau khi phan giai: {real_url}")
-
     match_drive = re.search(r'/d/([a-zA-Z0-9_-]+)', real_url) or re.search(r'id=([a-zA-Z0-9_-]+)', real_url)
+    
     if match_drive:
         file_id = match_drive.group(1)
         download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
@@ -178,34 +208,17 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
             download_url = f"https://drive.google.com/uc?export=download&confirm={token}&id={file_id}"
             response = session.get(download_url, stream=True)
 
-        content_type = response.headers.get("Content-Type", "")
-        if "text/html" in content_type:
-            direct_api = f"https://drive.usercontent.google.com/download?id={file_id}&export=download"
-            response = session.get(direct_api, stream=True)
+        if "text/html" in response.headers.get("Content-Type", ""):
+            download_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download"
+            response = session.get(download_url, stream=True)
 
         if response.status_code == 200:
             with open(output_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=65536):
                     if chunk:
                         f.write(chunk)
-            
             if os.path.exists(output_path) and os.path.getsize(output_path) > 50000:
-                print(f"✅ Da tai video thanh cong ve: {output_path} ({os.path.getsize(output_path)} bytes)")
                 return True
-            else:
-                print("⚠️ Tep tai ve qua nho hoac la trang HTML loi.")
-                return False
-
-    try:
-        r = requests.get(real_url, stream=True, timeout=30)
-        if r.status_code == 200 and "text/html" not in r.headers.get("Content-Type", ""):
-            with open(output_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=65536):
-                    if chunk:
-                        f.write(chunk)
-            return True
-    except Exception as e:
-        print(f"Loi tai file truc tiep: {e}")
 
     return False
 
@@ -213,21 +226,14 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
 # 5. XỬ LÝ SỰ KIỆN MENU & NHẬN TIN NHẮN
 # ==========================================
 def handle_menu_click(data: dict):
-    """Phản hồi khi người dùng bấm nút menu Send proof với template chuẩn"""
+    """Phản hồi khi bấm nút menu Send proof với template đã bỏ @tên nhân viên"""
     event = data.get("event", {})
-    event_key = event.get("event_key", "")
-    operator = event.get("operator", {})
-    operator_id = operator.get("operator_id", {})
-    open_id = operator_id.get("open_id", "") or operator.get("open_id", "")
-
-    print(f"📌 Da nhan click Menu Bot: key='{event_key}', open_id='{open_id}'")
-
-    if event_key == "trigger_proof_template":
-        # Sử dụng template check proof chuẩn của chị
+    if event.get("event_key") == "trigger_proof_template":
+        open_id = event.get("operator", {}).get("operator_id", {}).get("open_id", "") or event.get("operator", {}).get("open_id", "")
         template = (
             "📋 TEMPLATES CHECK PROOF \n\n"
             "Hãy copy đoạn bên dưới, dán vào ô chat rồi thêm Ticket_ID & link proof nhé:\n\n"
-            "Take proof & hold, send to @Tên_Nhân_Viên after confirmation\n"
+            "Take proof & hold after confirmation\n"
             "7687158181478451220\n"
             "https://acesse.one/46uh8zk"
         )
@@ -235,19 +241,16 @@ def handle_menu_click(data: dict):
             send_text_msg(open_id, "open_id", template)
 
 def handle_message_receive(data: dict):
-    """Bắt và phân tích tin nhắn người dùng gửi, làm sạch ký tự \n thừa"""
+    """Xử lý tin nhắn, tải video và trả về Thẻ Card chi tiết file"""
     event = data.get("event", {})
     message = event.get("message", {})
-    chat_type = message.get("chat_type", "")
     chat_id = message.get("chat_id", "")
-    
-    clean_text, mentions = extract_clean_text(message)
+
+    clean_text = extract_clean_text(message)
     if not clean_text:
         return
 
-    # Làm sạch các chuỗi \n thô nếu bị dính trong văn bản
     normalized_text = clean_text.replace(r"\n", "\n")
-
     urls = re.findall(r"https?://[^\s<>\"']+", normalized_text)
     order_ids = re.findall(r"\b\d{15,20}\b", normalized_text)
 
@@ -256,15 +259,13 @@ def handle_message_receive(data: dict):
 
     target_url = urls[0]
     order_id = order_ids[0] if order_ids else "PROOF_DATA"
-    print(f"Bat duoc link: {target_url} | Ma don: {order_id}")
 
-    confirm_msg = f"Đã nhận link Proof của đơn {order_id}. Bot đang tiến hành tải video dữ liệu..."
-    send_text_msg(chat_id, "chat_id", confirm_msg)
+    send_text_msg(chat_id, "chat_id", f"Đã nhận link Proof của đơn {order_id}. Bot đang tiến hành tải video dữ liệu...")
 
     file_name = f"{order_id}.mp4"
     if download_file_proof(target_url, file_name):
         file_size_mb = round(os.path.getsize(file_name) / (1024 * 1024), 2)
-        send_text_msg(chat_id, "chat_id", f"✅ Đã tải thành công video cho đơn {order_id} ({file_size_mb} MB)!")
+        send_detailed_card(chat_id, "chat_id", order_id, file_name, file_size_mb)
     else:
         send_text_msg(chat_id, "chat_id", f"⚠️ Không thể tải video từ link trên, vui lòng kiểm tra lại quyền truy cập!")
 
