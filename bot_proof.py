@@ -354,7 +354,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             if file_ext in [".mp4", ".mov"]:
                 upload_path = compress_video_if_large(file_path)
 
-                # Thử gửi dạng phát trực tiếp (media)
+                # Gửi dạng phát trực tiếp (media)
                 media_key = upload_file_direct(upload_path, "mp4")
                 if media_key:
                     media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
@@ -830,7 +830,7 @@ def process_request(message_id: str, text: str, sender_id: str):
         f"{type_content}\n\n"
     )
 
-    loading_styled = ## "⏳️ <font color='yellow'> 𝐥 𝐨 𝐚 𝐝 𝐢 𝐧 𝐠 ..... </font>"
+    loading_styled = "⏳️ <font color='yellow'> 𝐥 𝐨 𝐚 𝐝 𝐢 𝐧 𝐠 ..... </font>"
     right_badge_styled = f"<text_tag color='turquoise'>✎ᝰ┆</text_tag> <text_tag color='carmine'>[№ {req_count}]</text_tag>"
 
     report_card_payload = {
