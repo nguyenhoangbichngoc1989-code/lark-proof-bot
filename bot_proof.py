@@ -3,7 +3,6 @@ import sys
 import json
 import re
 import time
-import base64
 import requests
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -17,17 +16,22 @@ except ImportError:
     sys.exit(1)
 
 # ==========================================
-# 1. CẤU HÌNH XÁC THỰC BOT DEVE (AN TOÀN CHO GITHUB)
+# 1. CẤU HÌNH BIẾN MÔI TRƯỜNG & DOMAIN LARK QUỐC TẾ
 # ==========================================
-# Khóa dự phòng được mã hóa base64 để không bị GitHub Secret Scanning chặn
-_DEF_AID = base64.b64decode("Y2xpX2E2MzhiOTU4YzhiODkwMmY=").decode("utf-8")
-_DEF_SEC = base64.b64decode("SDV2MTNoNmo4YTN2Nkgybk40QjZHOEYzRDFBMlM0RDU=").decode("utf-8")
-
-APP_ID = os.environ.get("LARK_APP_ID", _DEF_AID).strip()
-APP_SECRET = os.environ.get("LARK_APP_SECRET", _DEF_SEC).strip()
+APP_ID = os.environ.get("LARK_APP_ID", "").strip()
+APP_SECRET = os.environ.get("LARK_APP_SECRET", "").strip()
 PORT = int(os.environ.get("PORT", 10000))
 
-client = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).log_level(lark.LogLevel.INFO).build()
+if not APP_ID or not APP_SECRET:
+    print("CANH BAO: Chua tim thay LARK_APP_ID hoac LARK_APP_SECRET trong Environment cua Render.")
+
+# Cấu hình domain chuẩn Lark quốc tế (tránh lỗi 1000040351 do trỏ nhầm Feishu nội địa)
+client = lark.Client.builder() \
+    .app_id(APP_ID) \
+    .app_secret(APP_SECRET) \
+    .domain(lark.DOMAIN_LARK) \
+    .log_level(lark.LogLevel.INFO) \
+    .build()
 
 # ==========================================
 # 2. HTTP SERVER PHỤ DUY TRÌ CỔNG RENDER
@@ -48,10 +52,10 @@ def run_dummy_server():
     server.serve_forever()
 
 # ==========================================
-# 3. HÀM GỬI TIN NHẮN VÀ BÓC TÁCH RICH TEXT
+# 3. HÀM GỬI TIN NHẮN & BÓC TÁCH NỘI DUNG RICH TEXT
 # ==========================================
 def send_text_msg(receive_id: str, receive_id_type: str, content_text: str):
-    """Gửi tin nhắn văn bản về chat Lark"""
+    """Gửi tin nhắn phản hồi qua Lark Open API"""
     try:
         content_dict = {"text": content_text}
         req = CreateMessageRequest.builder() \
@@ -65,12 +69,15 @@ def send_text_msg(receive_id: str, receive_id_type: str, content_text: str):
         
         resp = client.im.v1.message.create(req)
         if not resp.success():
-            print(f"Gui tin that bai: code={resp.code}, msg={resp.msg}")
+            print(f"Gui tin nhan that bai: code={resp.code}, msg={resp.msg}")
     except Exception as e:
-        print(f"Loi gui tin nhan: {e}")
+        print(f"Loi ngoai le khi gui tin nhan: {e}")
 
 def extract_clean_text(message_dict: dict):
-    """Bóc tách text sạch từ text thường và post rich text có mention @staff"""
+    """
+    Bóc tách nội dung text và mention, hỗ trợ cả tin nhắn thường (text)
+    và tin nhắn có gắn thẻ nhân viên (post/Rich Text).
+    """
     msg_type = message_dict.get("message_type", "")
     content_raw = message_dict.get("content", "{}")
     mentions_found = []
@@ -108,10 +115,10 @@ def extract_clean_text(message_dict: dict):
     return "", []
 
 # ==========================================
-# 4. TỰ ĐỘNG BỎ TRANG ĐỆM VÀ TẢI GOOGLE DRIVE
+# 4. VƯỢT TRANG ĐỆM ACESSE.ONE & TẢI GOOGLE DRIVE
 # ==========================================
 def resolve_target_url(short_url: str) -> str:
-    """Vượt qua trang đệm acesse.one / encurtador để lấy link Google Drive gốc"""
+    """Tự động cào mã trang acesse.one / encurtador để lấy link Google Drive đích"""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -123,7 +130,7 @@ def resolve_target_url(short_url: str) -> str:
         if "drive.google.com" in final_url:
             return final_url
             
-        # Tìm link Google Drive ẩn trong mã HTML trang trung gian
+        # Tìm link drive ẩn trong mã HTML trang đệm
         drive_links = re.findall(r'https://drive\.google\.com/[^\s"\'<>]+', res.text)
         if drive_links:
             return drive_links[0].replace(r'\/', '/')
@@ -134,9 +141,9 @@ def resolve_target_url(short_url: str) -> str:
         return short_url
 
 def download_file_proof(raw_url: str, output_path: str) -> bool:
-    """Tải tệp video/hình ảnh từ Google Drive hoặc link trực tiếp"""
+    """Tải tệp video/ảnh thật sự từ link Drive hoặc link trực tiếp"""
     real_url = resolve_target_url(raw_url)
-    print(f"Link dich thuc te: {real_url}")
+    print(f"Link thuc te sau phan giai: {real_url}")
 
     match_drive = re.search(r'/d/([a-zA-Z0-9_-]+)', real_url) or re.search(r'id=([a-zA-Z0-9_-]+)', real_url)
     if match_drive:
@@ -158,10 +165,9 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
                 for chunk in response.iter_content(chunk_size=65536):
                     if chunk:
                         f.write(chunk)
-            print(f"Da tai video thanh cong ve: {output_path}")
+            print(f"Da tai tep Drive thanh cong ve: {output_path}")
             return True
 
-    # Link truc tiep khac
     try:
         r = requests.get(real_url, stream=True, timeout=30)
         if r.status_code == 200 and "text/html" not in r.headers.get("Content-Type", ""):
@@ -176,10 +182,10 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
     return False
 
 # ==========================================
-# 5. XỬ LÝ SỰ KIỆN MENU & TIN NHẮN
+# 5. XỬ LÝ SỰ KIỆN MENU & NHẬN TIN NHẮN
 # ==========================================
 def handle_menu_click(data: dict):
-    """Phản hồi khi bấm nút menu 'Send proof'"""
+    """Phản hồi khi người dùng bấm nút menu Send proof"""
     event = data.get("event", {})
     event_key = event.get("event_key", "")
     operator_id = event.get("operator", {}).get("operator_id", {})
@@ -197,7 +203,7 @@ def handle_menu_click(data: dict):
             send_text_msg(open_id, "open_id", template)
 
 def handle_message_receive(data: dict):
-    """Xử lý tin nhắn chứa mã đơn và link"""
+    """Bắt và phân tích tin nhắn người dùng gửi"""
     event = data.get("event", {})
     message = event.get("message", {})
     chat_type = message.get("chat_type", "")
@@ -220,7 +226,6 @@ def handle_message_receive(data: dict):
     confirm_msg = f"Đã nhận link Proof của đơn {order_id}. Bot đang tiến hành tải video dữ liệu..."
     send_text_msg(chat_id, "chat_id", confirm_msg)
 
-    # Thử nghiệm tải tệp tin
     file_name = f"{order_id}.mp4"
     if download_file_proof(target_url, file_name):
         send_text_msg(chat_id, "chat_id", f"✅ Đã tải xong video cho đơn {order_id}!")
@@ -237,9 +242,11 @@ def run_lark_ws():
         .register_p2_im_message_receive_v1(lambda data: handle_message_receive(json.loads(lark.JSON.marshal(data)))) \
         .build()
 
+    # Chỉ định rõ domain=lark.DOMAIN_LARK khi kết nối WebSocket
     ws_client = lark.ws.Client(
         app_id=APP_ID,
         app_secret=APP_SECRET,
+        domain=lark.DOMAIN_LARK,
         event_handler=event_dispatcher,
         log_level=lark.LogLevel.INFO
     )
