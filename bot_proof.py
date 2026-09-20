@@ -37,8 +37,6 @@ HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
 FFMPEG_BIN = "ffmpeg"
 
 PROCESSED_MESSAGES = set()
-
-# Lưu trữ ngữ cảnh tin nhắn trong từng Thread để bắt chính xác nhân viên được @mention
 THREAD_MENTIONS_CACHE = {}
 
 # Connection Pooling siêu tốc
@@ -105,7 +103,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def clean_file_display_name(filename: str) -> str:
@@ -390,28 +388,57 @@ def check_gdrive_error(url: str) -> bool:
     except Exception:
         return False
 
+# HÀM GIẢI MÃ LINK RÚT GỌN (ACESSE.ONE, ENCURTADOR.DEV, BOM.SO,...)
 def resolve_proof_url(url: str) -> str:
-    if "bom.so" not in url:
-        return url
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    try:
-        r = global_session.get(url, headers=headers, allow_redirects=True, timeout=15, verify=False)
-        if r.url != url and "bom.so" not in r.url:
-            return r.url
-        html = r.text
-        meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', html, re.IGNORECASE)
-        if meta_match:
-            return meta_match.group(1).replace("&amp;", "&")
-        js_match = re.search(r'(?:window\.location(?:\.href)?|location\.href)\s*=\s*["\']([^"\']+)["\']', html)
-        if js_match:
-            return js_match.group(1).replace("&amp;", "&")
-        a_match = re.findall(r'href=["\'](https?://(?!bom\.so)[^"\']+)["\']', html)
-        for link in a_match:
-            if any(ext in link for ext in [".mp4", ".jpg", ".png", "fptcloud.com", "aliyuncs.com", "drive.google.com"]):
-                return link.replace("&amp;", "&")
-        return r.url
-    except Exception:
-        return url
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+    }
+    cur_url = url
+
+    # 1. Bóc tách trực tiếp API nếu là acesse.one / encurtador.dev
+    if "acesse.one" in cur_url or "encurtador.dev" in cur_url:
+        try:
+            code = cur_url.rstrip("/").split("/")[-1]
+            api_url = f"https://encurtador.dev/api/link/{code}"
+            r_api = global_session.get(api_url, headers=headers, timeout=8, verify=False)
+            if r_api.status_code == 200:
+                data = r_api.json()
+                dest = data.get("link", {}).get("destination") or data.get("destination") or data.get("url")
+                if dest:
+                    print(f"🔗 Bóc tách thành công API encurtador: {dest}")
+                    return dest
+        except Exception:
+            pass
+
+    # 2. Vòng lặp giải mã chuyển hướng qua thẻ meta / javascript
+    for _ in range(4):
+        try:
+            r = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=12, verify=False)
+            if r.url != cur_url:
+                cur_url = r.url
+            
+            if any(k in cur_url for k in ["drive.google.com", "sharepoint.com", "1drv.ms", "onedrive.live.com", ".mp4", ".png", ".jpg"]):
+                return cur_url
+
+            html = r.text
+
+            meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', html, re.IGNORECASE)
+            if meta_match:
+                cur_url = urllib.parse.urljoin(cur_url, meta_match.group(1).replace("&amp;", "&"))
+                continue
+
+            dest_match = re.search(r'["\'](https?://(?:drive\.google\.com|[^"\']*?\.(?:mp4|mov|jpg|png))[^"\']*)["\']', html)
+            if dest_match:
+                cur_url = dest_match.group(1).replace("&amp;", "&")
+                break
+
+            break
+        except Exception:
+            break
+
+    print(f"🔗 Link sau khi giải mã: {cur_url}")
+    return cur_url
 
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
     save_name = preferred_name or f"gdrive_{file_id}.mp4"
@@ -720,12 +747,10 @@ def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, tick
     headers = {"Authorization": f"Bearer {token}"}
     target_user_id = None
 
-    # Lấy nhân viên vừa được gắn thẻ @mention trong thread từ bộ nhớ đệm
     cached_mentions = THREAD_MENTIONS_CACHE.get(message_id, [])
     if cached_mentions:
         target_user_id = cached_mentions[-1]
 
-    # Nếu chưa có trong cache, quét từ API chi tiết tin nhắn
     if not target_user_id:
         try:
             url_search = f"https://open.larksuite.com/open-apis/im/v1/messages/{message_id}"
@@ -742,11 +767,8 @@ def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, tick
             print(f"Lỗi đọc tin nhắn thread: {e}")
 
     if target_user_id:
-        # 1. Tạo đường link tắt nhảy thẳng vào Thread Proof
-        # Cú pháp Applink chuẩn mở trực tiếp ứng dụng Lark vào tin nhắn:
         thread_link = f"https://applink.larksuite.com/client/message/detail?openChatId={chat_id}&messageId={message_id}"
 
-        # 2. Gửi tin nhắn riêng (DM) trực tiếp cho nhân viên kèm đường dẫn tắt
         dm_card_payload = {
             "header": {
                 "template": "blue",
@@ -793,11 +815,10 @@ def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, tick
                 json=forward_dm_body,
                 timeout=10
             )
-            print(f"✅ Đã gửi tin nhắn riêng điều chuyển đến nhân viên ID: {target_user_id}")
+            print(f"✅ Đã gửi tin nhắn riêng điều chuyển đến nhân viên: {target_user_id}")
         except Exception as e:
             print(f"Lỗi gửi tin nhắn riêng cho nhân viên: {e}")
 
-        # 3. Phản hồi xác nhận chính xác vào Thread theo yêu cầu của chị
         confirm_thread_text = f"📨 Deve đã chuyển Proof hoàn tất đến <at id=\"{target_user_id}\"></at> ạ!"
         try:
             body = ReplyMessageRequestBody.builder() \
@@ -814,7 +835,6 @@ def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, tick
             print(f"Lỗi phản hồi xác nhận vào Thread: {e}")
 
     else:
-        # Cảnh báo nếu chị chưa @mention tên nhân viên
         warning_msg = (
             "⚠️ <text_tag color='carmine'>𝐂𝐡𝐮̛𝐚 𝐜𝐨́ 𝐧𝐡𝐚̂𝐧 𝐯𝐢𝐞̂𝐧 đ𝐮̛𝐨̛̣𝐜 𝐠𝐚̆́𝐧 𝐭𝐡𝐞̉!</text_tag>\n\n"
             "Chị vui lòng **@tên_nhân_viên** vào Thread này trước, sau đó bấm lại nút **Transfer Proof** nhé!"
@@ -1091,9 +1111,8 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
             PROCESSED_MESSAGES.pop()
 
         chat_id = msg.chat_id or ""
-
-        # Ghi nhận các @mention trong thread để phục vụ chức năng Transfer Proof
         thread_root_id = msg.root_id or msg.parent_id or msg.message_id
+
         if msg.mentions:
             THREAD_MENTIONS_CACHE.setdefault(thread_root_id, [])
             for m in msg.mentions:
@@ -1107,13 +1126,12 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
             text = content.get("text", "")
             sender_id = event.sender.sender_id.open_id if (event.sender and event.sender.sender_id) else ""
             
-            # Chỉ xử lý lệnh tải nếu có chứa liên kết proof
             if "http://" in text or "https://" in text:
                 threading.Thread(target=process_request, args=(msg.message_id, chat_id, text, sender_id), daemon=True).start()
     except Exception as e:
         print(f"Lỗi handle_message: {e}")
 
-# Xử lý khi người dùng bấm vào Button "Transfer Proof"
+# Xử lý sự kiện bấm nút Transfer Proof
 def handle_card_action(data: lark.CustomizedEvent) -> dict:
     try:
         raw_body = json.loads(data.event) if isinstance(data.event, str) else data.event
@@ -1134,7 +1152,7 @@ def handle_card_action(data: lark.CustomizedEvent) -> dict:
             return {
                 "toast": {
                     "type": "info",
-                    "content": "Đang chuyển giao Proof đến nhân viên được gắn thẻ..."
+                    "content": "Đang chuyển giao Proof đến nhân viên..."
                 }
             }
     except Exception as e:
