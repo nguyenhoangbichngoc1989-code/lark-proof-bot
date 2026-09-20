@@ -22,7 +22,7 @@ APP_ID = os.environ.get("LARK_APP_ID", "").strip()
 APP_SECRET = os.environ.get("LARK_APP_SECRET", "").strip()
 PORT = int(os.environ.get("PORT", 10000))
 
-# Sử dụng chuẩn domain Lark quốc tế (https://open.larksuite.com)
+# Thiết lập kết nối cụm máy chủ quốc tế / Singapore
 TARGET_DOMAIN = getattr(lark, "LARK_DOMAIN", "https://open.larksuite.com")
 
 client = lark.Client.builder() \
@@ -152,7 +152,7 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
         session = requests.Session()
         response = session.get(download_url, stream=True)
         
-        # Vượt trang xác nhận file lớn của Google Drive
+        # Vượt cảnh báo quét virus file lớn của Google Drive
         for k, v in response.cookies.items():
             if k.startswith("download_warning"):
                 download_url = f"https://drive.google.com/uc?export=download&confirm={v}&id={file_id}"
@@ -187,13 +187,15 @@ def handle_menu_click(data: dict):
     """Phản hồi khi người dùng bấm nút menu Send proof"""
     event = data.get("event", {})
     event_key = event.get("event_key", "")
-    operator_id = event.get("operator", {}).get("operator_id", {})
-    open_id = operator_id.get("open_id", "")
+    operator_id = event.get("operator", {}).get("operator_name", {})
+    open_id = operator_id.get("open_id", "") or event.get("operator", {}).get("operator_id", {}).get("open_id", "")
+
+    print(f"📌 Da nhan click Menu Bot: key='{event_key}', open_id='{open_id}'")
 
     if event_key == "trigger_proof_template":
         template = (
             "📋 MẪU GỬI PROOF TIÊU CHUẨN\n\n"
-            "Chị copy đoạn bên dưới, dán vào ô chat rồi thêm mã đơn & link proof nhé:\n\n"
+            "Chị copy đoạn bên dưới, dán vào ô chat rồi điền thông tin nhé:\n\n"
             "Take proof & hold, send to @Tên_Nhân_Viên after confirmation\n"
             "7687158181478451220\n"
             "https://acesse.one/link-proof-cua-chi"
@@ -237,11 +239,12 @@ def handle_message_receive(data: dict):
 def run_lark_ws():
     print("BOT LARK PROOF DANG KHOI CHAY...")
     
+    # Đăng ký đồng thời cả sự kiện nhận tin nhắn và sự kiện click Menu Bot
     event_dispatcher = lark.EventDispatcherHandler.builder("", "") \
         .register_p2_im_message_receive_v1(lambda data: handle_message_receive(json.loads(lark.JSON.marshal(data)))) \
+        .register_p2_application_bot_menu_v6(lambda data: handle_menu_click(json.loads(lark.JSON.marshal(data)))) \
         .build()
 
-    # Chỉ định rõ domain Lark quốc tế cho WebSocket Client
     ws_client = lark.ws.Client(
         app_id=APP_ID,
         app_secret=APP_SECRET,
