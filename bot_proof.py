@@ -128,18 +128,18 @@ def resolve_target_url(short_url: str) -> str:
 
         html_text = res.text
 
-        # 1. Tìm trực tiếp URL Google Drive trong HTML hoặc Script
+        # 1. Tìm URL Google Drive trong HTML
         drive_links = re.findall(r'https://drive\.google\.com/[^\s"\'<>]+', html_text)
         if drive_links:
             clean_link = drive_links[0].replace(r'\/', '/').rstrip('\\')
             return clean_link
 
-        # 2. Tìm link đích trong thuộc tính href của nút 'Go to destination'
+        # 2. Tìm trong nút Go to destination
         destination_matches = re.findall(r'href=["\'](https?://[^"\']+)["\'][^>]*>[\s\r\n]*Go to destination', html_text, re.IGNORECASE)
         if destination_matches:
             return destination_matches[0]
 
-        # 3. Tìm link chuyển hướng trong thẻ meta refresh hoặc window.location
+        # 3. Tìm link chuyển hướng window.location
         redirect_matches = re.findall(r'(?:window\.location(?:\.href)?|url)\s*=\s*["\'](https?://[^"\']+)["\']', html_text, re.IGNORECASE)
         for cand in redirect_matches:
             if "encurtador" not in cand and "acesse.one" not in cand:
@@ -151,11 +151,10 @@ def resolve_target_url(short_url: str) -> str:
         return short_url
 
 def download_file_proof(raw_url: str, output_path: str) -> bool:
-    """Tải tệp video từ Google Drive (hỗ trợ cả tệp lớn) hoặc từ link trực tiếp"""
+    """Tải tệp video từ Google Drive hoặc link trực tiếp"""
     real_url = resolve_target_url(raw_url)
     print(f"🔗 Link dich sau khi phan giai: {real_url}")
 
-    # Nhận diện Google Drive File ID
     match_drive = re.search(r'/d/([a-zA-Z0-9_-]+)', real_url) or re.search(r'id=([a-zA-Z0-9_-]+)', real_url)
     if match_drive:
         file_id = match_drive.group(1)
@@ -164,7 +163,6 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
         session = requests.Session()
         response = session.get(download_url, stream=True)
 
-        # Kiểm tra xác nhận virus scan cho file dung lượng lớn
         token = None
         for k, v in response.cookies.items():
             if k.startswith("download_warning"):
@@ -172,7 +170,6 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
                 break
 
         if not token:
-            # Tìm token trong thẻ form xác nhận nếu cookie không có
             confirm_matches = re.findall(r'confirm=([0-9A-Za-z_]+)', response.text)
             if confirm_matches:
                 token = confirm_matches[0]
@@ -182,7 +179,6 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
             response = session.get(download_url, stream=True)
 
         content_type = response.headers.get("Content-Type", "")
-        # Nếu trả về HTML tức là chưa trúng file tải, thử endpoint trực tiếp dự phòng
         if "text/html" in content_type:
             direct_api = f"https://drive.usercontent.google.com/download?id={file_id}&export=download"
             response = session.get(direct_api, stream=True)
@@ -193,7 +189,6 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
                     if chunk:
                         f.write(chunk)
             
-            # Kiểm tra tệp tải về có dung lượng hợp lệ (> 50KB)
             if os.path.exists(output_path) and os.path.getsize(output_path) > 50000:
                 print(f"✅ Da tai video thanh cong ve: {output_path} ({os.path.getsize(output_path)} bytes)")
                 return True
@@ -201,7 +196,6 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
                 print("⚠️ Tep tai ve qua nho hoac la trang HTML loi.")
                 return False
 
-    # Tải file từ các nguồn trực tiếp khác
     try:
         r = requests.get(real_url, stream=True, timeout=30)
         if r.status_code == 200 and "text/html" not in r.headers.get("Content-Type", ""):
@@ -219,7 +213,7 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
 # 5. XỬ LÝ SỰ KIỆN MENU & NHẬN TIN NHẮN
 # ==========================================
 def handle_menu_click(data: dict):
-    """Phản hồi khi người dùng bấm nút menu Send proof"""
+    """Phản hồi khi người dùng bấm nút menu Send proof với template chuẩn"""
     event = data.get("event", {})
     event_key = event.get("event_key", "")
     operator = event.get("operator", {})
@@ -229,18 +223,19 @@ def handle_menu_click(data: dict):
     print(f"📌 Da nhan click Menu Bot: key='{event_key}', open_id='{open_id}'")
 
     if event_key == "trigger_proof_template":
+        # Sử dụng template check proof chuẩn của chị
         template = (
-            "📋 MẪU GỬI PROOF TIÊU CHUẨN\n\n"
-            "Chị copy đoạn bên dưới, dán vào ô chat rồi thêm mã đơn & link proof nhé:\n\n"
+            "📋 TEMPLATES CHECK PROOF \n\n"
+            "Hãy copy đoạn bên dưới, dán vào ô chat rồi thêm Ticket_ID & link proof nhé:\n\n"
             "Take proof & hold, send to @Tên_Nhân_Viên after confirmation\n"
             "7687158181478451220\n"
-            "https://acesse.one/link-proof-cua-chi"
+            "https://acesse.one/46uh8zk"
         )
         if open_id:
             send_text_msg(open_id, "open_id", template)
 
 def handle_message_receive(data: dict):
-    """Bắt và phân tích tin nhắn người dùng gửi"""
+    """Bắt và phân tích tin nhắn người dùng gửi, làm sạch ký tự \n thừa"""
     event = data.get("event", {})
     message = event.get("message", {})
     chat_type = message.get("chat_type", "")
@@ -250,8 +245,11 @@ def handle_message_receive(data: dict):
     if not clean_text:
         return
 
-    urls = re.findall(r"https?://[^\s<>\"']+", clean_text)
-    order_ids = re.findall(r"\b\d{15,20}\b", clean_text)
+    # Làm sạch các chuỗi \n thô nếu bị dính trong văn bản
+    normalized_text = clean_text.replace(r"\n", "\n")
+
+    urls = re.findall(r"https?://[^\s<>\"']+", normalized_text)
+    order_ids = re.findall(r"\b\d{15,20}\b", normalized_text)
 
     if not urls:
         return
