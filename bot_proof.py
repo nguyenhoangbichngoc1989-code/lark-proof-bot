@@ -396,7 +396,6 @@ def resolve_proof_url(url: str) -> str:
     }
     cur_url = url
 
-    # 1. Bóc tách trực tiếp API nếu là acesse.one / encurtador.dev
     if "acesse.one" in cur_url or "encurtador.dev" in cur_url:
         try:
             code = cur_url.rstrip("/").split("/")[-1]
@@ -411,7 +410,6 @@ def resolve_proof_url(url: str) -> str:
         except Exception:
             pass
 
-    # 2. Vòng lặp giải mã chuyển hướng qua thẻ meta / javascript
     for _ in range(4):
         try:
             r = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=12, verify=False)
@@ -737,7 +735,7 @@ def download_proof(url: str, target_dir: str) -> bool:
         print(f"Lỗi tải trực tiếp: {e}")
         return False
 
-# ----------------- HỖ TRỢ CHỨC NĂNG TRANSFER PROOF & FORWARD THREAD -----------------
+# ----------------- HỖ TRỢ CHỨC NĂNG TRANSFER PROOF VÀ PHẢN HỒI THẺ NHÂN VIÊN -----------------
 def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, ticket_id: str):
     print(f"🔄 Bắt đầu bàn giao Transfer Proof cho Ticket: {ticket_id}...")
     token = get_tenant_access_token()
@@ -747,10 +745,12 @@ def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, tick
     headers = {"Authorization": f"Bearer {token}"}
     target_user_id = None
 
+    # Lấy nhân viên từ cache được mention trong thread
     cached_mentions = THREAD_MENTIONS_CACHE.get(message_id, [])
     if cached_mentions:
         target_user_id = cached_mentions[-1]
 
+    # Quét dự phòng từ API tin nhắn nếu chưa có
     if not target_user_id:
         try:
             url_search = f"https://open.larksuite.com/open-apis/im/v1/messages/{message_id}"
@@ -769,21 +769,25 @@ def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, tick
     if target_user_id:
         thread_link = f"https://applink.larksuite.com/client/message/detail?openChatId={chat_id}&messageId={message_id}"
 
+        # THẺ GỬI CHO NHÂN VIÊN CÓ 2 NÚT HÀNH ĐỘNG
         dm_card_payload = {
             "header": {
                 "template": "blue",
                 "title": {
                     "tag": "plain_text",
-                    "content": "🔔 ĐIỀU CHUYỂN PROOF TICKET MỚI"
+                    "content": "🔔 ĐIỀU CHUYỂN PROOF TICKET"
                 }
             },
             "elements": [
                 {
                     "tag": "markdown",
                     "content": (
-                        f"👋 Chào bạn, bạn vừa được <at id=\"{operator_id}\"></at> chuyển giao xử lý Proof cho Ticket:\n\n"
-                        f"🎫 **Ticket ID:** `{ticket_id}`\n\n"
-                        f"📌 Vui lòng bấm vào nút bên dưới để chuyển thẳng đến Thread chứng từ kiểm tra tệp:"
+                        f"👋 Chào bạn, bạn vừa nhận được điều chuyển Proof cho Ticket:\n\n"
+                        f"🎫 **Ticket ID:** `{ticket_id}`\n"
+                        f"👤 **Người điều chuyển:** <at id=\"{operator_id}\"></at>\n\n"
+                        f"📌 Bấm link bên dưới để vào kiểm tra chứng từ trong Thread:\n"
+                        f"[👉 Mở Thread Proof ngay]({thread_link})\n\n"
+                        f"Sau khi kiểm tra, vui lòng xác nhận trạng thái bằng nút bên dưới:"
                     )
                 },
                 {
@@ -793,16 +797,36 @@ def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, tick
                             "tag": "button",
                             "text": {
                                 "tag": "plain_text",
-                                "content": "👉 Mở Ngay Thread Proof"
+                                "content": "🫆Proof Successfully"
                             },
                             "type": "primary",
-                            "url": thread_link
+                            "value": {
+                                "action": "proof_success",
+                                "ticket_id": ticket_id,
+                                "operator_id": operator_id,
+                                "root_msg_id": message_id
+                            }
+                        },
+                        {
+                            "tag": "button",
+                            "text": {
+                                "tag": "plain_text",
+                                "content": "🛑Proof failed"
+                            },
+                            "type": "danger",
+                            "value": {
+                                "action": "proof_failed",
+                                "ticket_id": ticket_id,
+                                "operator_id": operator_id,
+                                "root_msg_id": message_id
+                            }
                         }
                     ]
                 }
             ]
         }
 
+        # Gửi DM cho nhân viên
         try:
             forward_dm_body = {
                 "receive_id": target_user_id,
@@ -815,33 +839,81 @@ def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, tick
                 json=forward_dm_body,
                 timeout=10
             )
-            print(f"✅ Đã gửi tin nhắn riêng điều chuyển đến nhân viên: {target_user_id}")
+            print(f"✅ Đã gửi thẻ xác nhận đến nhân viên: {target_user_id}")
         except Exception as e:
             print(f"Lỗi gửi tin nhắn riêng cho nhân viên: {e}")
 
-        confirm_thread_text = f"📨 Deve đã chuyển Proof hoàn tất đến <at id=\"{target_user_id}\"></at> ạ!"
-        try:
-            body = ReplyMessageRequestBody.builder() \
-                .content(json.dumps({"text": confirm_thread_text})) \
-                .msg_type("text") \
-                .reply_in_thread(True) \
-                .build()
-            req = ReplyMessageRequest.builder() \
-                .message_id(message_id) \
-                .request_body(body) \
-                .build()
-            client.im.v1.message.reply(req)
-        except Exception as e:
-            print(f"Lỗi phản hồi xác nhận vào Thread: {e}")
+        # XÁC NHẬN CHÍNH XÁC VÀO THREAD THEO YÊU CẦU
+        confirm_thread_card = {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": f"<text_tag color='turquoise'>📨 𝘛𝘩𝘦 𝘱𝘳𝘰𝘰𝘧 𝘩𝘢𝘴 𝘣𝘦𝘦𝘯 𝘴𝘦𝘯𝘵 𝘵𝘰 <at id=\"{target_user_id}\"></at> 𝘣𝘺 𝘋𝘦𝘷𝘦!</text_tag>"
+                }
+            ]
+        }
+        reply_thread_card(message_id, confirm_thread_card)
 
     else:
         warning_msg = (
             "⚠️ <text_tag color='carmine'>𝐂𝐡𝐮̛𝐚 𝐜𝐨́ 𝐧𝐡𝐚̂𝐧 𝐯𝐢𝐞̂𝐧 đ𝐮̛𝐨̛̣𝐜 𝐠𝐚̆́𝐧 𝐭𝐡𝐞̉!</text_tag>\n\n"
-            "Chị vui lòng **@tên_nhân_viên** vào Thread này trước, sau đó bấm lại nút **Transfer Proof** nhé!"
+            "Chị vui lòng **@tên_nhân_viên** vào Thread này trước, sau đó bấm lại nút **🚀Transfer Proof** nhé!"
         )
         reply_thread_card(message_id, {
             "elements": [{"tag": "markdown", "content": warning_msg}]
         })
+
+# ----------------- XỬ LÝ NÚT THÀNH CÔNG HOẶC THẤT BẠI CỦA NHÂN VIÊN -----------------
+def handle_staff_proof_action(action_type: str, staff_id: str, operator_id: str, ticket_id: str, root_msg_id: str):
+    token = get_tenant_access_token()
+    if not token:
+        return
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if action_type == "proof_failed":
+        # Báo ngược lại chị và nhắc kiểm tra lại
+        alert_text = f"🚨 <at id=\"{operator_id}\"></at> 𝐂𝐨𝐮𝐥𝐝 𝐲𝐨𝐮 𝐝𝐨𝐮𝐛𝐥𝐞-𝐜𝐡𝐞𝐜𝐤 𝐭𝐡𝐢𝐬 𝐟𝐨𝐫 𝐦𝐞? (Proof của Ticket **{ticket_id}** được báo lỗi bởi <at id=\"{staff_id}\"></at>)"
+        
+        # 1. Phản hồi vào thread
+        if root_msg_id:
+            reply_thread_card(root_msg_id, {
+                "elements": [
+                    {
+                        "tag": "markdown",
+                        "content": alert_text
+                    }
+                ]
+            })
+
+        # 2. Báo trực tiếp tin nhắn riêng (DM) cho chị
+        if operator_id:
+            try:
+                dm_body = {
+                    "receive_id": operator_id,
+                    "msg_type": "text",
+                    "content": json.dumps({"text": alert_text})
+                }
+                global_session.post(
+                    "https://open.larksuite.com/open-apis/im/v1/messages?receive_id_type=open_id",
+                    headers=headers,
+                    json=dm_body,
+                    timeout=10
+                )
+            except Exception as e:
+                print(f"Lỗi gửi alert DM: {e}")
+
+    elif action_type == "proof_success":
+        success_text = f"✅ Nhân viên <at id=\"{staff_id}\"></at> đã xác nhận nhận Proof của Ticket **{ticket_id}** thành công!"
+        if root_msg_id:
+            reply_thread_card(root_msg_id, {
+                "elements": [
+                    {
+                        "tag": "markdown",
+                        "content": success_text
+                    }
+                ]
+            })
 
 # ----------------- XỬ LÝ CHÍNH & RENDER THẺ -----------------
 def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
@@ -1008,7 +1080,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     # GỬI GỘP TẤT CẢ TỆP VÀO THREAD
     upload_and_send_batch_proofs(message_id, final_files)
 
-    # THẺ 2: THÔNG BÁO HOÀN TẤT KÈM NÚT TRANSFER PROOF
+    # THẺ 2: THÔNG BÁO HOÀN TẤT KÈM NÚT "🚀Transfer Proof" (color: green)
     rabbit_side_md = (
         "<font color='turquoise'>-ˋ (\\ (\\   .\n"
         ".(„• ֊ •„)\n"
@@ -1079,7 +1151,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
                         "tag": "button",
                         "text": {
                             "tag": "plain_text",
-                            "content": "🚀 Transfer Proof"
+                            "content": "🚀Transfer Proof"
                         },
                         "type": "primary",
                         "value": {
@@ -1113,6 +1185,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         chat_id = msg.chat_id or ""
         thread_root_id = msg.root_id or msg.parent_id or msg.message_id
 
+        # Lưu lại danh sách nhân viên được @mention trong Thread
         if msg.mentions:
             THREAD_MENTIONS_CACHE.setdefault(thread_root_id, [])
             for m in msg.mentions:
@@ -1131,14 +1204,15 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
     except Exception as e:
         print(f"Lỗi handle_message: {e}")
 
-# Xử lý sự kiện bấm nút Transfer Proof
+# XỬ LÝ TOÀN BỘ SỰ KIỆN CLICK BUTTON TRÊN CÁC THẺ
 def handle_card_action(data: lark.CustomizedEvent) -> dict:
     try:
         raw_body = json.loads(data.event) if isinstance(data.event, str) else data.event
         action_value = raw_body.get("action", {}).get("value", {})
         operator_id = raw_body.get("operator", {}).get("open_id", "")
+        action_name = action_value.get("action")
         
-        if action_value.get("action") == "transfer_proof":
+        if action_name == "transfer_proof":
             ticket_id = action_value.get("ticket_id", "N/A")
             root_msg_id = action_value.get("root_msg_id", "")
             chat_id = action_value.get("chat_id", "")
@@ -1152,7 +1226,26 @@ def handle_card_action(data: lark.CustomizedEvent) -> dict:
             return {
                 "toast": {
                     "type": "info",
-                    "content": "Đang chuyển giao Proof đến nhân viên..."
+                    "content": "Đang điều chuyển Proof đến nhân viên được chỉ định..."
+                }
+            }
+
+        elif action_name in ["proof_success", "proof_failed"]:
+            ticket_id = action_value.get("ticket_id", "N/A")
+            op_id = action_value.get("operator_id", "")
+            root_msg_id = action_value.get("root_msg_id", "")
+            
+            threading.Thread(
+                target=handle_staff_proof_action,
+                args=(action_name, operator_id, op_id, ticket_id, root_msg_id),
+                daemon=True
+            ).start()
+
+            toast_msg = "Đã xác nhận nhận Proof thành công!" if action_name == "proof_success" else "Đã báo lỗi Proof đến người gửi!"
+            return {
+                "toast": {
+                    "type": "success" if action_name == "proof_success" else "warning",
+                    "content": toast_msg
                 }
             }
     except Exception as e:
@@ -1164,7 +1257,7 @@ def silent_ignored_handler(data) -> None:
 
 def start_bot():
     print("=" * 60)
-    print("🚀 BOT LARK PROOF (PHIÊN BẢN CLOUD TĂNG TỐC & TRANSFER PROOF 2026)...")
+    print("🚀 BOT LARK PROOF (PHIÊN BẢN CLOUD TĂNG TỐC, MENTION TRANSFER & STAFF FEEDBACK 2026)...")
     print("=" * 60)
     
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
