@@ -38,6 +38,9 @@ FFMPEG_BIN = "ffmpeg"
 
 PROCESSED_MESSAGES = set()
 
+# Lưu trữ ngữ cảnh tin nhắn trong từng Thread để bắt chính xác nhân viên được @mention
+THREAD_MENTIONS_CACHE = {}
+
 # Connection Pooling siêu tốc
 global_session = requests.Session()
 retries = Retry(total=2, backoff_factor=0.3, status_forcelist=[500, 502, 503, 504])
@@ -102,7 +105,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
+        return f"{size_bytes / (1024 * 1024):.2f} KB"
     return f"{size_bytes} B"
 
 def clean_file_display_name(filename: str) -> str:
@@ -321,7 +324,6 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
     try:
         print(f"🚀 Bắt đầu đẩy gộp {len(final_files)} tệp vào Thread...")
         
-        # 1. Gửi ảnh trước
         image_keys = []
         for f in final_files:
             file_path = f["path"]
@@ -342,7 +344,6 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
             client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
 
-        # 2. Xử lý video và các tệp đính kèm
         for f in final_files:
             file_path = f["path"]
             file_name = f["name"]
@@ -354,14 +355,12 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             if file_ext in [".mp4", ".mov"]:
                 upload_path = compress_video_if_large(file_path)
 
-                # Gửi dạng phát trực tiếp (media)
                 media_key = upload_file_direct(upload_path, "mp4")
                 if media_key:
                     media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(media_body).build())
                     print(f"🎬 Đã gửi khung phát video: {file_name}")
 
-                # Gửi dạng file đính kèm (stream)
                 stream_key = upload_file_direct(upload_path, "stream")
                 if stream_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": stream_key})).msg_type("file").reply_in_thread(True).build()
@@ -711,8 +710,121 @@ def download_proof(url: str, target_dir: str) -> bool:
         print(f"Lỗi tải trực tiếp: {e}")
         return False
 
+# ----------------- HỖ TRỢ CHỨC NĂNG TRANSFER PROOF & FORWARD THREAD -----------------
+def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, ticket_id: str):
+    print(f"🔄 Bắt đầu bàn giao Transfer Proof cho Ticket: {ticket_id}...")
+    token = get_tenant_access_token()
+    if not token:
+        return
+
+    headers = {"Authorization": f"Bearer {token}"}
+    target_user_id = None
+
+    # Lấy nhân viên vừa được gắn thẻ @mention trong thread từ bộ nhớ đệm
+    cached_mentions = THREAD_MENTIONS_CACHE.get(message_id, [])
+    if cached_mentions:
+        target_user_id = cached_mentions[-1]
+
+    # Nếu chưa có trong cache, quét từ API chi tiết tin nhắn
+    if not target_user_id:
+        try:
+            url_search = f"https://open.larksuite.com/open-apis/im/v1/messages/{message_id}"
+            res = global_session.get(url_search, headers=headers, timeout=10)
+            if res.status_code == 200:
+                data_items = res.json().get("data", {}).get("items", [])
+                if data_items:
+                    for m in data_items[0].get("mentions", []):
+                        m_id = m.get("id")
+                        if m_id and m_id != APP_ID and m_id != operator_id:
+                            target_user_id = m_id
+                            break
+        except Exception as e:
+            print(f"Lỗi đọc tin nhắn thread: {e}")
+
+    if target_user_id:
+        # 1. Tạo đường link tắt nhảy thẳng vào Thread Proof
+        # Cú pháp Applink chuẩn mở trực tiếp ứng dụng Lark vào tin nhắn:
+        thread_link = f"https://applink.larksuite.com/client/message/detail?openChatId={chat_id}&messageId={message_id}"
+
+        # 2. Gửi tin nhắn riêng (DM) trực tiếp cho nhân viên kèm đường dẫn tắt
+        dm_card_payload = {
+            "header": {
+                "template": "blue",
+                "title": {
+                    "tag": "plain_text",
+                    "content": "🔔 ĐIỀU CHUYỂN PROOF TICKET MỚI"
+                }
+            },
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": (
+                        f"👋 Chào bạn, bạn vừa được <at id=\"{operator_id}\"></at> chuyển giao xử lý Proof cho Ticket:\n\n"
+                        f"🎫 **Ticket ID:** `{ticket_id}`\n\n"
+                        f"📌 Vui lòng bấm vào nút bên dưới để chuyển thẳng đến Thread chứng từ kiểm tra tệp:"
+                    )
+                },
+                {
+                    "tag": "action",
+                    "actions": [
+                        {
+                            "tag": "button",
+                            "text": {
+                                "tag": "plain_text",
+                                "content": "👉 Mở Ngay Thread Proof"
+                            },
+                            "type": "primary",
+                            "url": thread_link
+                        }
+                    ]
+                }
+            ]
+        }
+
+        try:
+            forward_dm_body = {
+                "receive_id": target_user_id,
+                "msg_type": "interactive",
+                "content": json.dumps(dm_card_payload)
+            }
+            global_session.post(
+                "https://open.larksuite.com/open-apis/im/v1/messages?receive_id_type=open_id",
+                headers=headers,
+                json=forward_dm_body,
+                timeout=10
+            )
+            print(f"✅ Đã gửi tin nhắn riêng điều chuyển đến nhân viên ID: {target_user_id}")
+        except Exception as e:
+            print(f"Lỗi gửi tin nhắn riêng cho nhân viên: {e}")
+
+        # 3. Phản hồi xác nhận chính xác vào Thread theo yêu cầu của chị
+        confirm_thread_text = f"📨 Deve đã chuyển Proof hoàn tất đến <at id=\"{target_user_id}\"></at> ạ!"
+        try:
+            body = ReplyMessageRequestBody.builder() \
+                .content(json.dumps({"text": confirm_thread_text})) \
+                .msg_type("text") \
+                .reply_in_thread(True) \
+                .build()
+            req = ReplyMessageRequest.builder() \
+                .message_id(message_id) \
+                .request_body(body) \
+                .build()
+            client.im.v1.message.reply(req)
+        except Exception as e:
+            print(f"Lỗi phản hồi xác nhận vào Thread: {e}")
+
+    else:
+        # Cảnh báo nếu chị chưa @mention tên nhân viên
+        warning_msg = (
+            "⚠️ <text_tag color='carmine'>𝐂𝐡𝐮̛𝐚 𝐜𝐨́ 𝐧𝐡𝐚̂𝐧 𝐯𝐢𝐞̂𝐧 đ𝐮̛𝐨̛̣𝐜 𝐠𝐚̆́𝐧 𝐭𝐡𝐞̉!</text_tag>\n\n"
+            "Chị vui lòng **@tên_nhân_viên** vào Thread này trước, sau đó bấm lại nút **Transfer Proof** nhé!"
+        )
+        reply_thread_card(message_id, {
+            "elements": [{"tag": "markdown", "content": warning_msg}]
+        })
+
 # ----------------- XỬ LÝ CHÍNH & RENDER THẺ -----------------
-def process_request(message_id: str, text: str, sender_id: str):
+def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     urls = re.findall(r'https?://[^\s<>"]+', text)
 
     ticket_id = "N/A"
@@ -876,7 +988,7 @@ def process_request(message_id: str, text: str, sender_id: str):
     # GỬI GỘP TẤT CẢ TỆP VÀO THREAD
     upload_and_send_batch_proofs(message_id, final_files)
 
-    # THẺ 2: THÔNG BÁO HOÀN TẤT
+    # THẺ 2: THÔNG BÁO HOÀN TẤT KÈM NÚT TRANSFER PROOF
     rabbit_side_md = (
         "<font color='turquoise'>-ˋ (\\ (\\   .\n"
         ".(„• ֊ •„)\n"
@@ -939,6 +1051,25 @@ def process_request(message_id: str, text: str, sender_id: str):
                     "content": thankyou_center_md
                 },
                 "text_align": "center"
+            },
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": "🚀 Transfer Proof"
+                        },
+                        "type": "primary",
+                        "value": {
+                            "action": "transfer_proof",
+                            "ticket_id": ticket_id,
+                            "root_msg_id": message_id,
+                            "chat_id": chat_id
+                        }
+                    }
+                ]
             }
         ]
     }
@@ -959,30 +1090,72 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         if len(PROCESSED_MESSAGES) > 500:
             PROCESSED_MESSAGES.pop()
 
+        chat_id = msg.chat_id or ""
+
+        # Ghi nhận các @mention trong thread để phục vụ chức năng Transfer Proof
+        thread_root_id = msg.root_id or msg.parent_id or msg.message_id
+        if msg.mentions:
+            THREAD_MENTIONS_CACHE.setdefault(thread_root_id, [])
+            for m in msg.mentions:
+                if m.key and m.id and m.id.open_id:
+                    open_id = m.id.open_id
+                    if open_id != APP_ID:
+                        THREAD_MENTIONS_CACHE[thread_root_id].append(open_id)
+
         if msg.message_type == "text":
             content = json.loads(msg.content)
             text = content.get("text", "")
             sender_id = event.sender.sender_id.open_id if (event.sender and event.sender.sender_id) else ""
-            threading.Thread(target=process_request, args=(msg.message_id, text, sender_id), daemon=True).start()
+            
+            # Chỉ xử lý lệnh tải nếu có chứa liên kết proof
+            if "http://" in text or "https://" in text:
+                threading.Thread(target=process_request, args=(msg.message_id, chat_id, text, sender_id), daemon=True).start()
     except Exception as e:
         print(f"Lỗi handle_message: {e}")
+
+# Xử lý khi người dùng bấm vào Button "Transfer Proof"
+def handle_card_action(data: lark.CustomizedEvent) -> dict:
+    try:
+        raw_body = json.loads(data.event) if isinstance(data.event, str) else data.event
+        action_value = raw_body.get("action", {}).get("value", {})
+        operator_id = raw_body.get("operator", {}).get("open_id", "")
+        
+        if action_value.get("action") == "transfer_proof":
+            ticket_id = action_value.get("ticket_id", "N/A")
+            root_msg_id = action_value.get("root_msg_id", "")
+            chat_id = action_value.get("chat_id", "")
+            
+            threading.Thread(
+                target=execute_transfer_proof, 
+                args=(root_msg_id, chat_id, operator_id, ticket_id), 
+                daemon=True
+            ).start()
+            
+            return {
+                "toast": {
+                    "type": "info",
+                    "content": "Đang chuyển giao Proof đến nhân viên được gắn thẻ..."
+                }
+            }
+    except Exception as e:
+        print(f"Lỗi xử lý button action: {e}")
+    return {}
 
 def silent_ignored_handler(data) -> None:
     pass
 
 def start_bot():
     print("=" * 60)
-    print("🚀 BOT LARK PROOF (PHIÊN BẢN CLOUD TĂNG TỐC 2026)...")
+    print("🚀 BOT LARK PROOF (PHIÊN BẢN CLOUD TĂNG TỐC & TRANSFER PROOF 2026)...")
     print("=" * 60)
     
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
-    # Đăng ký nhận tin nhắn bình thường
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
+    builder.register_p1_customized_event("card.action.trigger", handle_card_action)
     event_handler = builder.build()
 
-    # Gán trực tiếp handler rỗng vào từ điển _handlers của SDK để triệt tiêu lỗi đỏ im.message.updated_v1
     if hasattr(event_handler, "_handlers"):
         event_handler._handlers["im.message.updated_v1"] = silent_ignored_handler
     if hasattr(event_handler, "custom_handlers"):
