@@ -22,7 +22,6 @@ APP_ID = os.environ.get("LARK_APP_ID", "").strip()
 APP_SECRET = os.environ.get("LARK_APP_SECRET", "").strip()
 PORT = int(os.environ.get("PORT", 10000))
 
-# Thiết lập kết nối cụm máy chủ quốc tế / Singapore
 TARGET_DOMAIN = getattr(lark, "LARK_DOMAIN", "https://open.larksuite.com")
 
 client = lark.Client.builder() \
@@ -73,10 +72,7 @@ def send_text_msg(receive_id: str, receive_id_type: str, content_text: str):
         print(f"Loi ngoai le khi gui tin nhan: {e}")
 
 def extract_clean_text(message_dict: dict):
-    """
-    Bóc tách nội dung text và mention, hỗ trợ cả tin nhắn thường (text)
-    và tin nhắn có gắn thẻ nhân viên (post/Rich Text).
-    """
+    """Bóc tách text sạch từ text thường và post rich text có mention"""
     msg_type = message_dict.get("message_type", "")
     content_raw = message_dict.get("content", "{}")
     mentions_found = []
@@ -114,12 +110,13 @@ def extract_clean_text(message_dict: dict):
     return "", []
 
 # ==========================================
-# 4. VƯỢT TRANG ĐỆM ACESSE.ONE & TẢI GOOGLE DRIVE
+# 4. BỘ GIẢI MÃ LINK TRUNG GIAN & TẢI DRIVE TỰ ĐỘNG
 # ==========================================
 def resolve_target_url(short_url: str) -> str:
-    """Tự động cào mã trang acesse.one / encurtador để lấy link Google Drive đích"""
+    """Giải mã link rút gọn acesse.one / encurtador.dev để lấy link Google Drive thật"""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     }
     try:
         session = requests.Session()
@@ -128,22 +125,37 @@ def resolve_target_url(short_url: str) -> str:
         
         if "drive.google.com" in final_url:
             return final_url
-            
-        # Tìm link Google Drive ẩn trong mã HTML trang đệm
-        drive_links = re.findall(r'https://drive\.google\.com/[^\s"\'<>]+', res.text)
+
+        html_text = res.text
+
+        # 1. Tìm trực tiếp URL Google Drive trong HTML hoặc Script
+        drive_links = re.findall(r'https://drive\.google\.com/[^\s"\'<>]+', html_text)
         if drive_links:
-            return drive_links[0].replace(r'\/', '/')
-            
+            clean_link = drive_links[0].replace(r'\/', '/').rstrip('\\')
+            return clean_link
+
+        # 2. Tìm link đích trong thuộc tính href của nút 'Go to destination'
+        destination_matches = re.findall(r'href=["\'](https?://[^"\']+)["\'][^>]*>[\s\r\n]*Go to destination', html_text, re.IGNORECASE)
+        if destination_matches:
+            return destination_matches[0]
+
+        # 3. Tìm link chuyển hướng trong thẻ meta refresh hoặc window.location
+        redirect_matches = re.findall(r'(?:window\.location(?:\.href)?|url)\s*=\s*["\'](https?://[^"\']+)["\']', html_text, re.IGNORECASE)
+        for cand in redirect_matches:
+            if "encurtador" not in cand and "acesse.one" not in cand:
+                return cand
+
         return final_url
     except Exception as e:
         print(f"Loi phan giai link: {e}")
         return short_url
 
 def download_file_proof(raw_url: str, output_path: str) -> bool:
-    """Tải tệp video từ Google Drive hoặc link trực tiếp"""
+    """Tải tệp video từ Google Drive (hỗ trợ cả tệp lớn) hoặc từ link trực tiếp"""
     real_url = resolve_target_url(raw_url)
-    print(f"Link thuc te sau phan giai: {real_url}")
+    print(f"🔗 Link dich sau khi phan giai: {real_url}")
 
+    # Nhận diện Google Drive File ID
     match_drive = re.search(r'/d/([a-zA-Z0-9_-]+)', real_url) or re.search(r'id=([a-zA-Z0-9_-]+)', real_url)
     if match_drive:
         file_id = match_drive.group(1)
@@ -151,22 +163,45 @@ def download_file_proof(raw_url: str, output_path: str) -> bool:
         
         session = requests.Session()
         response = session.get(download_url, stream=True)
-        
-        # Vượt cảnh báo quét virus file lớn của Google Drive
+
+        # Kiểm tra xác nhận virus scan cho file dung lượng lớn
+        token = None
         for k, v in response.cookies.items():
             if k.startswith("download_warning"):
-                download_url = f"https://drive.google.com/uc?export=download&confirm={v}&id={file_id}"
-                response = session.get(download_url, stream=True)
+                token = v
                 break
-                
-        if response.status_code == 200 and "text/html" not in response.headers.get("Content-Type", ""):
+
+        if not token:
+            # Tìm token trong thẻ form xác nhận nếu cookie không có
+            confirm_matches = re.findall(r'confirm=([0-9A-Za-z_]+)', response.text)
+            if confirm_matches:
+                token = confirm_matches[0]
+
+        if token:
+            download_url = f"https://drive.google.com/uc?export=download&confirm={token}&id={file_id}"
+            response = session.get(download_url, stream=True)
+
+        content_type = response.headers.get("Content-Type", "")
+        # Nếu trả về HTML tức là chưa trúng file tải, thử endpoint trực tiếp dự phòng
+        if "text/html" in content_type:
+            direct_api = f"https://drive.usercontent.google.com/download?id={file_id}&export=download"
+            response = session.get(direct_api, stream=True)
+
+        if response.status_code == 200:
             with open(output_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=65536):
                     if chunk:
                         f.write(chunk)
-            print(f"Da tai tep Drive thanh cong ve: {output_path}")
-            return True
+            
+            # Kiểm tra tệp tải về có dung lượng hợp lệ (> 50KB)
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 50000:
+                print(f"✅ Da tai video thanh cong ve: {output_path} ({os.path.getsize(output_path)} bytes)")
+                return True
+            else:
+                print("⚠️ Tep tai ve qua nho hoac la trang HTML loi.")
+                return False
 
+    # Tải file từ các nguồn trực tiếp khác
     try:
         r = requests.get(real_url, stream=True, timeout=30)
         if r.status_code == 200 and "text/html" not in r.headers.get("Content-Type", ""):
@@ -187,15 +222,16 @@ def handle_menu_click(data: dict):
     """Phản hồi khi người dùng bấm nút menu Send proof"""
     event = data.get("event", {})
     event_key = event.get("event_key", "")
-    operator_id = event.get("operator", {}).get("operator_name", {})
-    open_id = operator_id.get("open_id", "") or event.get("operator", {}).get("operator_id", {}).get("open_id", "")
+    operator = event.get("operator", {})
+    operator_id = operator.get("operator_id", {})
+    open_id = operator_id.get("open_id", "") or operator.get("open_id", "")
 
     print(f"📌 Da nhan click Menu Bot: key='{event_key}', open_id='{open_id}'")
 
     if event_key == "trigger_proof_template":
         template = (
             "📋 MẪU GỬI PROOF TIÊU CHUẨN\n\n"
-            "Chị copy đoạn bên dưới, dán vào ô chat rồi điền thông tin nhé:\n\n"
+            "Chị copy đoạn bên dưới, dán vào ô chat rồi thêm mã đơn & link proof nhé:\n\n"
             "Take proof & hold, send to @Tên_Nhân_Viên after confirmation\n"
             "7687158181478451220\n"
             "https://acesse.one/link-proof-cua-chi"
@@ -229,7 +265,8 @@ def handle_message_receive(data: dict):
 
     file_name = f"{order_id}.mp4"
     if download_file_proof(target_url, file_name):
-        send_text_msg(chat_id, "chat_id", f"✅ Đã tải xong video cho đơn {order_id}!")
+        file_size_mb = round(os.path.getsize(file_name) / (1024 * 1024), 2)
+        send_text_msg(chat_id, "chat_id", f"✅ Đã tải thành công video cho đơn {order_id} ({file_size_mb} MB)!")
     else:
         send_text_msg(chat_id, "chat_id", f"⚠️ Không thể tải video từ link trên, vui lòng kiểm tra lại quyền truy cập!")
 
@@ -239,7 +276,6 @@ def handle_message_receive(data: dict):
 def run_lark_ws():
     print("BOT LARK PROOF DANG KHOI CHAY...")
     
-    # Đăng ký đồng thời cả sự kiện nhận tin nhắn và sự kiện click Menu Bot
     event_dispatcher = lark.EventDispatcherHandler.builder("", "") \
         .register_p2_im_message_receive_v1(lambda data: handle_message_receive(json.loads(lark.JSON.marshal(data)))) \
         .register_p2_application_bot_menu_v6(lambda data: handle_menu_click(json.loads(lark.JSON.marshal(data)))) \
