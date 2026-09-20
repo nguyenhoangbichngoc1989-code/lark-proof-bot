@@ -144,26 +144,26 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VIDEO SIÊU TỐC (CHỈ NÉN KHI > 30MB) -----------------
+# ----------------- NÉN VIDEO SIÊU TỐC & KHÔNG TIMEOUT -----------------
 def compress_video_if_large(video_path: str) -> str:
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
-    if size_mb <= 30.0:
-        print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) đạt chuẩn an toàn, gửi trực tiếp!")
+    if size_mb <= 25.0:
+        print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) <= 25MB, gửi trực tiếp!")
         return video_path
 
-    print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) vượt 30MB. Đang nén tăng tốc...")
+    print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) vượt 25MB. Đang nén tối ưu CPU...")
     name, ext = os.path.splitext(video_path)
     compressed_path = f"{name}_compressed.mp4"
 
     cmd = (
         f'"{FFMPEG_BIN}" -y -threads 2 -i "{video_path}" '
-        f'-vf "scale=\'min(480,iw)\':-2,fps=24" '
-        f'-c:v libx264 -preset ultrafast -crf 30 '
+        f'-vf "scale=\'min(480,iw)\':-2,fps=20" '
+        f'-c:v libx264 -preset ultrafast -crf 32 '
         f'-c:a aac -b:a 32k -ac 1 '
         f'"{compressed_path}"'
     )
     try:
-        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
         gc.collect()
         if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
             compressed_mb = os.path.getsize(compressed_path) / (1024 * 1024)
@@ -354,12 +354,14 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             if file_ext in [".mp4", ".mov"]:
                 upload_path = compress_video_if_large(file_path)
 
+                # Thử gửi dạng phát trực tiếp (media)
                 media_key = upload_file_direct(upload_path, "mp4")
                 if media_key:
                     media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(media_body).build())
                     print(f"🎬 Đã gửi khung phát video: {file_name}")
 
+                # Gửi dạng file đính kèm (stream)
                 stream_key = upload_file_direct(upload_path, "stream")
                 if stream_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": stream_key})).msg_type("file").reply_in_thread(True).build()
@@ -415,7 +417,7 @@ def resolve_proof_url(url: str) -> str:
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
     save_name = preferred_name or f"gdrive_{file_id}.mp4"
     save_path = os.path.join(target_dir, save_name)
-    print(f"📥 Đang tải siêu tốc Google Drive ID: {file_id} ...")
+    print(f"📥 Đang tải Google Drive ID: {file_id} ...")
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -449,7 +451,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
                     if chunk:
                         f.write(chunk)
             if os.path.exists(save_path) and os.path.getsize(save_path) > 2000:
-                print(f"📥 Tải siêu tốc thành công: {save_name} ({format_size(os.path.getsize(save_path))})")
+                print(f"📥 Tải thành công: {save_name} ({format_size(os.path.getsize(save_path))})")
                 return True
     except Exception as e:
         print(f"Session download: {e}")
@@ -823,8 +825,8 @@ def process_request(message_id: str, text: str, sender_id: str):
     # THẺ 1: BÁO CÁO BAN ĐẦU
     card_element_top = (
         f"🎫 {ticket_id}\n"
-        f"    ╰┄▸💾 {format_size(total_size)}\n"
-        f"          ╰┄▸🗂 {len(final_files)}/{len(final_files)}\n\n"
+        f" ╰┄▸💾 {format_size(total_size)}\n"
+        f"     ╰┄▸🗂 {len(final_files)}/{len(final_files)}\n\n"
         f"{type_content}\n\n"
     )
 
@@ -883,7 +885,7 @@ def process_request(message_id: str, text: str, sender_id: str):
 
     title_side_md = (
         "       <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n"
-        "<text_tag color='turquoise'>-ˋˏ   𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
+        "<text_tag color='turquoise'>-ˋˏ   𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
     )
 
     at_middle_md = (
@@ -965,20 +967,8 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
     except Exception as e:
         print(f"Lỗi handle_message: {e}")
 
-class CustomEventDispatcher(lark.EventDispatcherHandler):
-    def do(self, req: lark.EventReq) -> lark.EventResp:
-        # Bỏ qua âm thầm sự kiện updated_v1 để không xuất hiện lỗi processor not found
-        try:
-            body = json.loads(req.body.decode("utf-8")) if isinstance(req.body, bytes) else json.loads(req.body)
-            header = body.get("header", {})
-            event_type = header.get("event_type", "")
-            if event_type == "im.message.updated_v1":
-                resp = lark.EventResp()
-                resp.status_code = 200
-                return resp
-        except Exception:
-            pass
-        return super().do(req)
+def silent_ignored_handler(data) -> None:
+    pass
 
 def start_bot():
     print("=" * 60)
@@ -987,9 +977,16 @@ def start_bot():
     
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
-    builder = CustomEventDispatcher.builder("", "")
+    # Đăng ký nhận tin nhắn bình thường
+    builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
     event_handler = builder.build()
+
+    # Gán trực tiếp handler rỗng vào từ điển _handlers của SDK để triệt tiêu lỗi đỏ im.message.updated_v1
+    if hasattr(event_handler, "_handlers"):
+        event_handler._handlers["im.message.updated_v1"] = silent_ignored_handler
+    if hasattr(event_handler, "custom_handlers"):
+        event_handler.custom_handlers["im.message.updated_v1"] = silent_ignored_handler
 
     ws_client = lark.ws.Client(
         APP_ID, 
