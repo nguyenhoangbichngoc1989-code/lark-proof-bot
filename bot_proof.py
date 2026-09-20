@@ -16,20 +16,19 @@ except ImportError:
     sys.exit(1)
 
 # ==========================================
-# 1. CẤU HÌNH BIẾN MÔI TRƯỜNG & DOMAIN LARK QUỐC TẾ
+# 1. CẤU HÌNH BIẾN MÔI TRƯỜNG & DOMAIN LARK
 # ==========================================
 APP_ID = os.environ.get("LARK_APP_ID", "").strip()
 APP_SECRET = os.environ.get("LARK_APP_SECRET", "").strip()
 PORT = int(os.environ.get("PORT", 10000))
 
-if not APP_ID or not APP_SECRET:
-    print("CANH BAO: Chua tim thay LARK_APP_ID hoac LARK_APP_SECRET trong Environment cua Render.")
+# Sử dụng chuẩn domain Lark quốc tế (https://open.larksuite.com)
+TARGET_DOMAIN = getattr(lark, "LARK_DOMAIN", "https://open.larksuite.com")
 
-# Cấu hình domain chuẩn Lark quốc tế (tránh lỗi 1000040351 do trỏ nhầm Feishu nội địa)
 client = lark.Client.builder() \
     .app_id(APP_ID) \
     .app_secret(APP_SECRET) \
-    .domain(lark.DOMAIN_LARK) \
+    .domain(TARGET_DOMAIN) \
     .log_level(lark.LogLevel.INFO) \
     .build()
 
@@ -52,7 +51,7 @@ def run_dummy_server():
     server.serve_forever()
 
 # ==========================================
-# 3. HÀM GỬI TIN NHẮN & BÓC TÁCH NỘI DUNG RICH TEXT
+# 3. HÀM GỬI TIN NHẮN & BÓC TÁCH RICH TEXT
 # ==========================================
 def send_text_msg(receive_id: str, receive_id_type: str, content_text: str):
     """Gửi tin nhắn phản hồi qua Lark Open API"""
@@ -130,7 +129,7 @@ def resolve_target_url(short_url: str) -> str:
         if "drive.google.com" in final_url:
             return final_url
             
-        # Tìm link drive ẩn trong mã HTML trang đệm
+        # Tìm link Google Drive ẩn trong mã HTML trang đệm
         drive_links = re.findall(r'https://drive\.google\.com/[^\s"\'<>]+', res.text)
         if drive_links:
             return drive_links[0].replace(r'\/', '/')
@@ -141,7 +140,7 @@ def resolve_target_url(short_url: str) -> str:
         return short_url
 
 def download_file_proof(raw_url: str, output_path: str) -> bool:
-    """Tải tệp video/ảnh thật sự từ link Drive hoặc link trực tiếp"""
+    """Tải tệp video từ Google Drive hoặc link trực tiếp"""
     real_url = resolve_target_url(raw_url)
     print(f"Link thuc te sau phan giai: {real_url}")
 
@@ -242,11 +241,11 @@ def run_lark_ws():
         .register_p2_im_message_receive_v1(lambda data: handle_message_receive(json.loads(lark.JSON.marshal(data)))) \
         .build()
 
-    # Chỉ định rõ domain=lark.DOMAIN_LARK khi kết nối WebSocket
+    # Chỉ định rõ domain Lark quốc tế cho WebSocket Client
     ws_client = lark.ws.Client(
         app_id=APP_ID,
         app_secret=APP_SECRET,
-        domain=lark.DOMAIN_LARK,
+        domain=TARGET_DOMAIN,
         event_handler=event_dispatcher,
         log_level=lark.LogLevel.INFO
     )
