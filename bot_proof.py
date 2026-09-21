@@ -295,7 +295,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
     except Exception as e:
         print(f"Lỗi xử lý gửi media: {e}")
 
-# ----------------- 5. GIẢI MÃ LINK RÚT GỌN & GOOGLE DRIVE -----------------
+# ----------------- 5. GIẢI MÃ LINK RÚT GỌN & GOOGLE DRIVE (HỖ TRỢ FOLDER) -----------------
 def resolve_proof_url(url: str) -> str:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -380,14 +380,71 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"Lỗi tải file Drive: {e}")
 
+    try:
+        import gdown
+        output = gdown.download(id=file_id, output=save_path, quiet=True)
+        if output and os.path.exists(output) and os.path.getsize(output) > 2000:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
+    """Tải toàn bộ file trong thư mục Google Drive"""
+    folder_match = re.search(r'/folders/([a-zA-Z0-9_-]+)', folder_url)
+    folder_id = folder_match.group(1) if folder_match else ""
+    clean_url = f"https://drive.google.com/drive/folders/{folder_id}" if folder_id else folder_url.split("?")[0]
+
+    try:
+        import gdown
+        downloaded = gdown.download_folder(clean_url, output=target_dir, quiet=True, use_cookies=False)
+        if downloaded and len(downloaded) > 0:
+            return True
+    except Exception:
+        pass
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        res = global_session.get(clean_url, headers=headers, timeout=20, verify=False)
+        if res.status_code == 200:
+            html = res.text
+            found_files = {}
+
+            matches = re.findall(r'\["([a-zA-Z0-9_-]{28,45})",\["([^"]+)"', html)
+            for fid, fname in matches:
+                fname_clean = clean_file_display_name(fname)
+                if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".avi", ".mkv", ".jpg", ".png", ".jpeg", ".webp"]):
+                    found_files[fid] = fname_clean
+
+            if not found_files:
+                matches_alt = re.findall(r'\["([a-zA-Z0-9_-]{28,45})","([^"]+)"', html)
+                for fid, fname in matches_alt:
+                    fname_clean = clean_file_display_name(fname)
+                    if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".jpg", ".png", ".jpeg"]):
+                        found_files[fid] = fname_clean
+
+            if found_files:
+                success_count = 0
+                for fid, fname in found_files.items():
+                    if download_single_gdrive_file(fid, target_dir, fname):
+                        success_count += 1
+                return success_count > 0
+    except Exception as e:
+        print(f"Lỗi bóc tách Folder Drive: {e}")
+
     return False
 
 def download_proof(url: str, target_dir: str) -> bool:
     final_url = resolve_proof_url(url)
+    
     if "drive.google.com" in final_url:
-        match = re.search(r'(?:/file/d/|id=)([a-zA-Z0-9_-]+)', final_url)
-        if match:
-            return download_single_gdrive_file(match.group(1), target_dir)
+        if "/folders/" in final_url:
+            return download_gdrive_folder(final_url, target_dir)
+        else:
+            match = re.search(r'(?:/file/d/|id=)([a-zA-Z0-9_-]+)', final_url)
+            if match:
+                return download_single_gdrive_file(match.group(1), target_dir)
 
     try:
         res = global_session.get(final_url, stream=True, timeout=90, verify=False)
@@ -403,7 +460,40 @@ def download_proof(url: str, target_dir: str) -> bool:
         pass
     return False
 
-# ----------------- 6. XỬ LÝ TIN NHẮN & ĐỊNH DẠNG THẺ CHUẨN ĐẸP -----------------
+# ----------------- 6. BÓC TÁCH NỘI DUNG TEXT VÀ POST RICH TEXT -----------------
+def extract_message_text(message: dict) -> str:
+    """Bóc tách toàn bộ chuỗi ký tự từ cả dạng tin nhắn 'text' lẫn 'post' (Rich Text)"""
+    msg_type = message.get("message_type", "")
+    content_raw = message.get("content", "{}")
+
+    try:
+        content_json = json.loads(content_raw)
+    except Exception:
+        return ""
+
+    if msg_type == "text":
+        return content_json.get("text", "")
+
+    if msg_type == "post":
+        extracted_pieces = []
+        paragraphs = content_json.get("content", [])
+        if not paragraphs and "post" in content_json:
+            first_locale = next(iter(content_json["post"].values()), {})
+            paragraphs = first_locale.get("content", [])
+
+        for p in paragraphs:
+            for item in p:
+                tag = item.get("tag")
+                if tag in ["text", "a"]:
+                    text_val = item.get("text", "") or item.get("href", "")
+                    extracted_pieces.append(text_val)
+                elif tag == "at":
+                    extracted_pieces.append(f"@{item.get('user_name', '') or item.get('user_id', '')}")
+        return " ".join(extracted_pieces)
+
+    return ""
+
+# ----------------- 7. XỬ LÝ TIN NHẮN & RENDER 2 THẺ ĐỊNH DẠNG CHUẨN -----------------
 def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     urls = re.findall(r'https?://[^\s<>"]+', text)
     order_match = re.search(r"\b(\d{15,21})\b", text)
@@ -414,6 +504,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
 
     req_count = get_current_request_count(ticket_id)
     task_temp_dir = os.path.join(TEMP_DIR, message_id)
+    shutil.rmtree(task_temp_dir, ignore_errors=True)
     os.makedirs(task_temp_dir, exist_ok=True)
 
     for u in urls:
@@ -477,7 +568,6 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
     
     sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
-    # Tiêu đề Level 3 Heading to và rõ ràng
     heading_md = f"### <font color='carmine'>♡</font> {sender_mention} ơi...\n     ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*\n"
     thankyou_center_md = "<font color='turquoise'> ┊t h a n k y o u┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
@@ -511,15 +601,16 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         chat_id = msg.chat_id or ""
         sender_id = data.event.sender.sender_id.open_id if (data.event.sender and data.event.sender.sender_id) else ""
 
-        if msg.message_type == "text":
-            text = json.loads(msg.content).get("text", "")
-            if "http" in text:
-                threading.Thread(target=process_request, args=(msg.message_id, chat_id, text, sender_id), daemon=True).start()
+        # Bóc tách nội dung của cả tin nhắn text và post (có link preview)
+        msg_dict = {"message_type": msg.message_type, "content": msg.content}
+        text = extract_message_text(msg_dict)
+
+        if "http://" in text or "https://" in text:
+            threading.Thread(target=process_request, args=(msg.message_id, chat_id, text, sender_id), daemon=True).start()
     except Exception as e:
         print(f"Lỗi message: {e}")
 
 def handle_menu_click(data: dict) -> None:
-    """Xử lý sự kiện Push Event khi bấm menu Send proof"""
     try:
         event = data.get("event", {})
         event_key = event.get("event_key", "")
@@ -539,9 +630,9 @@ def handle_menu_click(data: dict) -> None:
     except Exception as e:
         print(f"Lỗi menu click: {e}")
 
-# ----------------- 7. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
+# ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF (WEBSOCKET PERSISTENT CONNECTION SẴN SÀNG)...")
+    print("🚀 BOT LARK PROOF (SẴN SÀNG NHẬN LINK TEXT & POST PREVIEW)...")
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
     builder = lark.EventDispatcherHandler.builder("", "")
