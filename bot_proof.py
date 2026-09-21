@@ -516,13 +516,12 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     header_block = (
         f"*<font color='turquoise'>          ≽^•⩊•^≼  </font>*\n"
         f"*<font color='turquoise'> ✧; Ｗｅｌｃｏｍｅ ;✧</font>*\n\n"
-        f"🎫 <text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-        f"      ╰┄▸ 💾 <text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
-        f"                ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
+        f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
+        f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
+        f"          ╰┄▸ 🗂️<text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
         f"• 🎬 : {file_count} file\n"
         f"{files_str}\n\n"
-        f"⌛ *<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．</text_tag>*\n"
-        f"*<text_tag color='yellow'>███████▒▒▒ 8O %</text_tag>*"
+        f"⌛*<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O%</text_tag>*\n"
     )
 
     report_card_payload = {
