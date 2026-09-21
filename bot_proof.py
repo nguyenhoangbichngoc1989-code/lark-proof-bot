@@ -233,13 +233,11 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_video_if_large(file_path)
                 
-                # Gửi khung video
                 media_key = upload_file_direct(send_path, "mp4")
                 if media_key:
                     media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(media_body).build())
 
-                # Gửi tệp đính kèm
                 stream_key = upload_file_direct(send_path, "stream")
                 if stream_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": stream_key})).msg_type("file").reply_in_thread(True).build()
@@ -256,8 +254,11 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
 
         gc.collect()
 
-# ----------------- 5. GIẢI MÃ LINK RÚT GỌN & GOOGLE DRIVE FOLDER -----------------
+# ----------------- 5. GIẢI MÃ LINK RÚT GỌN, FPT CLOUD & GOOGLE DRIVE -----------------
 def resolve_proof_url(url: str) -> str:
+    if any(ext in url.lower() for ext in [".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm"]):
+        return url
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -398,6 +399,7 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 def download_proof(url: str, target_dir: str) -> bool:
     final_url = resolve_proof_url(url)
     
+    # Google Drive
     if "drive.google.com" in final_url:
         if "/folders/" in final_url:
             return download_gdrive_folder(final_url, target_dir)
@@ -406,18 +408,31 @@ def download_proof(url: str, target_dir: str) -> bool:
             if match:
                 return download_single_gdrive_file(match.group(1), target_dir)
 
+    # Link trực tiếp (FPT Cloud S3, Tikinow,...)
     try:
-        res = global_session.get(final_url, stream=True, timeout=90, verify=False)
-        if res.status_code == 200 and "text/html" not in res.headers.get("content-type", ""):
-            filename = f"proof_{len(os.listdir(target_dir)) + 1}.mp4"
-            save_path = os.path.join(target_dir, filename)
+        parsed_url = urllib.parse.urlparse(final_url)
+        path_name = os.path.basename(parsed_url.path)
+        
+        # Lấy tên file gốc chuẩn xác
+        if path_name and ("." in path_name):
+            save_name = path_name
+        else:
+            save_name = f"video_{len(os.listdir(target_dir)) + 1}.mp4"
+
+        save_path = os.path.join(target_dir, save_name)
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+        res = global_session.get(final_url, headers=headers, stream=True, timeout=120, verify=False)
+        if res.status_code == 200:
             with open(save_path, "wb") as f:
                 for chunk in res.iter_content(chunk_size=8 * 1024 * 1024):
                     if chunk:
                         f.write(chunk)
-            return True
-    except Exception:
-        pass
+            if os.path.exists(save_path) and os.path.getsize(save_path) > 1000:
+                return True
+    except Exception as e:
+        print(f"Lỗi tải file trực tiếp: {e}")
+
     return False
 
 # ----------------- 6. BÓC TÁCH NỘI DUNG TEXT VÀ POST RICH TEXT -----------------
@@ -452,7 +467,7 @@ def extract_message_text(message: dict) -> str:
 
     return ""
 
-# ----------------- 7. XỬ LÝ TIN NHẮN & RENDER 2 THẺ ĐỊNH DẠNG HOÀN HẢO -----------------
+# ----------------- 7. XỬ LÝ TIN NHẮN & RENDER 2 THẺ ĐỊNH DẠNG CHUẨN ĐẸP -----------------
 def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     urls = re.findall(r'https?://[^\s<>"]+', text)
     order_match = re.search(r"\b(\d{15,21})\b", text)
@@ -492,21 +507,21 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     total_size = sum(x["size"] for x in final_files)
     file_count = len(final_files)
 
-    # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU THEO ĐÚNG FORMAT MÀU CHỊ GỬI ----------------
+    # ---------------- THẺ 1: ĐÚNG CHUẨN TỪNG GAM MÀU & THỤT DÒNG CỦA CHỊ ----------------
     file_lines = []
     for item in final_files:
         file_lines.append(f"<font color='carmine'>╰┄‌• </font> {item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
     files_str = "\n".join(file_lines)
 
     header_block = (
-        f"*<font color='turquoise'>      ≽^•⩊•^≼  </font>*\n"
+        f"*<font color='turquoise'>          ≽^•⩊•^≼  </font>*\n"
         f"*<font color='turquoise'> ✧; Ｗｅｌｃｏｍｅ ;✧</font>*\n\n"
         f"🎫 <text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-        f"   ╰┄▸ 💾 <text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
-        f"          ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
+        f"      ╰┄▸ 💾 <text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
+        f"                ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
         f"• 🎬 : {file_count} file\n"
         f"{files_str}\n\n"
-        f"⌛ *<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．</text_tag>*"
+        f"⌛ *<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．</text_tag>*\n"
         f"*<text_tag color='yellow'>███████▒▒▒ 8O %</text_tag>*"
     )
 
@@ -523,17 +538,14 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     # ---------------- GỬI TỆP VÀO THREAD ----------------
     upload_and_send_batch_proofs(message_id, final_files)
 
-    # ---------------- THẺ 2: KẾT QUẢ VỚI LEVEL 3 HEADING & THANK YOU CĂN GIỮA TUYỆT ĐỐI ----------------
+    # ---------------- THẺ 2: KẾT QUẢ VỚI LEVEL 3 HEADING & THANK YOU CÂN ĐỐI 100% ----------------
     rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
     title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
     
     sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
     
-    # LEVEL 3 HEADING CHUẨN: ### đứng đầu dòng, chữ to, rõ, không bị lỗi text thô ###
-    heading_md = (
-        f"### ♡ {sender_mention} ơi...\n"
-        f"╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
-    )
+    # Heading Level 3 thuần túy chuẩn cú pháp Markdown Lark
+    heading_md = f"### ♡ {sender_mention} ơi...\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
 
     finish_card_payload = {
         "elements": [
@@ -554,7 +566,15 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": "<font color='turquoise'>┊t h a n k y o u┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+                    "content": "<font color='turquoise'>┊ t h a n k y o u ┊</font>"
+                },
+                "text_align": "center"
+            },
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "<font color='turquoise'>┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
                 },
                 "text_align": "center"
             }
