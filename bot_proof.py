@@ -403,7 +403,7 @@ def download_proof(url: str, target_dir: str) -> bool:
         pass
     return False
 
-# ----------------- 6. XỬ LÝ TIN NHẮN & KHÔI PHỤC FORMAT ĐẸP CHUẨN -----------------
+# ----------------- 6. XỬ LÝ TIN NHẮN & ĐỊNH DẠNG THẺ CHUẨN ĐẸP -----------------
 def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     urls = re.findall(r'https?://[^\s<>"]+', text)
     order_match = re.search(r"\b(\d{15,21})\b", text)
@@ -440,48 +440,45 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
 
     record_successful_request(ticket_id, req_count)
     total_size = sum(x["size"] for x in final_files)
+    file_count = len(final_files)
 
-    # ---------------- THẺ 1: BÁO CÁO DANH SÁCH FILE & LOADING THEO FORMAT CỦA CHỊ ----------------
-    file_list_lines = []
+    # ---------------- THẺ 1: ĐÚNG FORMAT MÀU, CÂN ĐỐI & THANH TIẾN TRÌNH NGHỆ THUẬT ----------------
+    file_lines = []
     for item in final_files:
-        formatted_single_size = format_size(item['size'])
-        file_list_lines.append(
-            f"     <font color='carmine'>╰┄‌• </font> {item['name']}: <text_tag color='carmine'>[{formatted_single_size}]</text_tag>"
-        )
-    files_str = "\n".join(file_list_lines)
+        file_lines.append(f"     <font color='carmine'>╰┄‌• </font> {item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
+    files_str = "\n".join(file_lines)
 
-    total_size_str = format_size(total_size)
-    total_count = len(final_files)
-
-    header_indent_block = (
+    header_block = (
         f"🎫 <text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-        f"             ╰┄▸ 💾 <text_tag color='carmine'>{total_size_str}</text_tag>\n"
-        f"                            ╰┄▸ 🗂️ <text_tag color='indigo'>{total_count}/{total_count}</text_tag>\n\n"
-        f"• 🎬 : {total_count} file\n"
+        f"             ╰┄▸ 💾 <text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
+        f"                            ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
+        f"• 🎬 : {file_count} file\n"
         f"{files_str}\n\n"
-        f"*<font color='turquoise'> ≽^•⩊•^≼ </font>* *<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．</text_tag>*"
+        f"*<font color='turquoise'> ≽^•⩊•^≼ </font>* *<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．</text_tag>*\n"
+        f"*<text_tag color='yellow'>8O %</text_tag>*\n"
+        f"*<text_tag color='yellow'>███████▒▒▒</text_tag>*"
     )
 
     report_card_payload = {
         "elements": [
             {
                 "tag": "markdown",
-                "content": header_indent_block
+                "content": header_block
             }
         ]
     }
     reply_thread_card(message_id, report_card_payload)
 
-    # ---------------- GỬI GỘP TỆP VÀO THREAD ----------------
+    # ---------------- GỬI TỆP VÀO THREAD ----------------
     upload_and_send_batch_proofs(message_id, final_files)
 
-    # ---------------- THẺ 2: THÔNG BÁO KẾT QUẢ LEVEL 3 HEADING CÂN ĐỐI ----------------
+    # ---------------- THẺ 2: KẾT QUẢ VỚI LEVEL 3 HEADING & BỐ CỤC CHUẨN ----------------
     rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
     title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
     
     sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
-    # Định dạng Heading Level 3 với ### và trái tim carmine
-    at_middle_md = f"### <font color='carmine'>♡</font> {sender_mention} ơi...\n     ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*\n"
+    # Tiêu đề Level 3 Heading to và rõ ràng
+    heading_md = f"### <font color='carmine'>♡</font> {sender_mention} ơi...\n     ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*\n"
     thankyou_center_md = "<font color='turquoise'> ┊t h a n k y o u┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
     finish_card_payload = {
@@ -495,7 +492,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
                     {"tag": "column", "width": "weighted", "weight": 1, "elements": [{"tag": "markdown", "content": title_side_md}]}
                 ]
             },
-            {"tag": "markdown", "content": at_middle_md},
+            {"tag": "markdown", "content": heading_md},
             {"tag": "div", "text": {"tag": "lark_md", "content": thankyou_center_md}, "text_align": "center"}
         ]
     }
