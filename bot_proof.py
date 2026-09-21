@@ -403,7 +403,7 @@ def download_proof(url: str, target_dir: str) -> bool:
         pass
     return False
 
-# ----------------- 6. XỬ LÝ TIN NHẮN & KHÔI PHỤC ĐẦY ĐỦ 2 THẺ -----------------
+# ----------------- 6. XỬ LÝ TIN NHẮN & KHÔI PHỤC FORMAT ĐẸP CHUẨN -----------------
 def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     urls = re.findall(r'https?://[^\s<>"]+', text)
     order_match = re.search(r"\b(\d{15,21})\b", text)
@@ -441,17 +441,32 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     record_successful_request(ticket_id, req_count)
     total_size = sum(x["size"] for x in final_files)
 
-    # ---------------- THẺ 1: BÁO CÁO DANH SÁCH FILE & LOADING ----------------
-    file_list_md = []
+    # ---------------- THẺ 1: BÁO CÁO DANH SÁCH FILE & LOADING THEO FORMAT CỦA CHỊ ----------------
+    file_list_lines = []
     for item in final_files:
-        file_list_md.append(f"  • {item['name']}: [{format_size(item['size'])}]")
-    files_str = "\n".join(file_list_md)
+        formatted_single_size = format_size(item['size'])
+        file_list_lines.append(
+            f"     <font color='carmine'>╰┄‌• </font> {item['name']}: <text_tag color='carmine'>[{formatted_single_size}]</text_tag>"
+        )
+    files_str = "\n".join(file_list_lines)
+
+    total_size_str = format_size(total_size)
+    total_count = len(final_files)
+
+    header_indent_block = (
+        f"🎫 <text_tag color='turquoise'>{ticket_id}</text_tag>\n"
+        f"             ╰┄▸ 💾 <text_tag color='carmine'>{total_size_str}</text_tag>\n"
+        f"                            ╰┄▸ 🗂️ <text_tag color='indigo'>{total_count}/{total_count}</text_tag>\n\n"
+        f"• 🎬 : {total_count} file\n"
+        f"{files_str}\n\n"
+        f"*<font color='turquoise'> ≽^•⩊•^≼ </font>* *<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．</text_tag>*"
+    )
 
     report_card_payload = {
         "elements": [
             {
                 "tag": "markdown",
-                "content": f"🎫 **{ticket_id}**\n╰┄▸ 💾 **{format_size(total_size)}**\n╰┄▸ 📑 {len(final_files)}/{len(final_files)}\n\n• 🎬 : {len(final_files)} file\n{files_str}\n\n⏳ *l o a d i n g .....*"
+                "content": header_indent_block
             }
         ]
     }
@@ -460,13 +475,14 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     # ---------------- GỬI GỘP TỆP VÀO THREAD ----------------
     upload_and_send_batch_proofs(message_id, final_files)
 
-    # ---------------- THẺ 2: THÔNG BÁO KẾT QUẢ HOÀN TẤT (KHÔNG CÓ NÚT BẤM) ----------------
+    # ---------------- THẺ 2: THÔNG BÁO KẾT QUẢ LEVEL 3 HEADING CÂN ĐỐI ----------------
     rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
     title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
     
     sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
-    at_middle_md = f"### <font color='carmine'>♡</font> {sender_mention} ơi...\n     ╰┄▸🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*\n"
-    thankyou_center_md = "<font color='turquoise'>        ┊t h a n k y o u┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+    # Định dạng Heading Level 3 với ### và trái tim carmine
+    at_middle_md = f"### <font color='carmine'>♡</font> {sender_mention} ơi...\n     ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*\n"
+    thankyou_center_md = "<font color='turquoise'> ┊t h a n k y o u┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
     finish_card_payload = {
         "elements": [
