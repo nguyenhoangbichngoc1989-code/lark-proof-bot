@@ -403,7 +403,7 @@ def download_proof(url: str, target_dir: str) -> bool:
         pass
     return False
 
-# ----------------- 6. XỬ LÝ SỰ KIỆN TIN NHẮN & NÚT BẤM MENU -----------------
+# ----------------- 6. XỬ LÝ TIN NHẮN & KHÔI PHỤC ĐẦY ĐỦ 2 THẺ -----------------
 def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     urls = re.findall(r'https?://[^\s<>"]+', text)
     order_match = re.search(r"\b(\d{15,21})\b", text)
@@ -441,17 +441,49 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     record_successful_request(ticket_id, req_count)
     total_size = sum(x["size"] for x in final_files)
 
-    # Thẻ thông tin chuẩn không kèm button
+    # ---------------- THẺ 1: BÁO CÁO DANH SÁCH FILE & LOADING ----------------
+    file_list_md = []
+    for item in final_files:
+        file_list_md.append(f"  • {item['name']}: [{format_size(item['size'])}]")
+    files_str = "\n".join(file_list_md)
+
     report_card_payload = {
         "elements": [
             {
                 "tag": "markdown",
-                "content": f"🎫 **{ticket_id}**\n—> 💾 **{format_size(total_size)}**\n—> 📑 1/1\n\n• 🎬 : 1 file\n  • {final_files[0]['name']}: [{format_size(final_files[0]['size'])}]\n\n⏳ *l o a d i n g .....*"
+                "content": f"🎫 **{ticket_id}**\n╰┄▸ 💾 **{format_size(total_size)}**\n╰┄▸ 📑 {len(final_files)}/{len(final_files)}\n\n• 🎬 : {len(final_files)} file\n{files_str}\n\n⏳ *l o a d i n g .....*"
             }
         ]
     }
     reply_thread_card(message_id, report_card_payload)
+
+    # ---------------- GỬI GỘP TỆP VÀO THREAD ----------------
     upload_and_send_batch_proofs(message_id, final_files)
+
+    # ---------------- THẺ 2: THÔNG BÁO KẾT QUẢ HOÀN TẤT (KHÔNG CÓ NÚT BẤM) ----------------
+    rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
+    title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
+    
+    sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
+    at_middle_md = f"### <font color='carmine'>♡</font> {sender_mention} ơi...\n     ╰┄▸🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*\n"
+    thankyou_center_md = "<font color='turquoise'>        ┊t h a n k y o u┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+
+    finish_card_payload = {
+        "elements": [
+            {
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": "default",
+                "columns": [
+                    {"tag": "column", "width": "auto", "elements": [{"tag": "markdown", "content": rabbit_side_md}]},
+                    {"tag": "column", "width": "weighted", "weight": 1, "elements": [{"tag": "markdown", "content": title_side_md}]}
+                ]
+            },
+            {"tag": "markdown", "content": at_middle_md},
+            {"tag": "div", "text": {"tag": "lark_md", "content": thankyou_center_md}, "text_align": "center"}
+        ]
+    }
+    reply_thread_card(message_id, finish_card_payload)
 
     shutil.rmtree(task_temp_dir, ignore_errors=True)
     gc.collect()
@@ -501,10 +533,7 @@ def start_bot():
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
-    
-    # Đăng ký bắt sự kiện menu bot
     builder.register_p2_application_bot_menu_v6(lambda d: handle_menu_click(json.loads(lark.JSON.marshal(d))))
-    
     event_handler = builder.build()
 
     ws_client = lark.ws.Client(
