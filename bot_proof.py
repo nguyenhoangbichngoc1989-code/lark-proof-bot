@@ -1,6 +1,3 @@
-import static_ffmpeg
-static_ffmpeg.add_paths()
-
 import os
 import re
 import gc
@@ -23,6 +20,13 @@ from lark_oapi.api.im.v1 import *
 import urllib3
 from PIL import Image
 import pillow_heif
+
+# Thử nạp ffmpeg từ static_ffmpeg nếu có, không chặn luồng nếu lỗi
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+except Exception:
+    pass
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pillow_heif.register_heif_opener()
@@ -175,8 +179,8 @@ def compress_video_if_large(video_path: str) -> str:
         cmd = [
             "ffmpeg", "-y", "-i", video_path,
             "-vf", "scale='min(640,iw)':-2,fps=24",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30",
-            "-c:a", "aac", "-b:a", "64k",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
+            "-c:a", "aac", "-b:a", "48k",
             compressed_path
         ]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=240)
@@ -399,7 +403,7 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 def download_proof(url: str, target_dir: str) -> bool:
     final_url = resolve_proof_url(url)
     
-    # Google Drive
+    # 1. Google Drive
     if "drive.google.com" in final_url:
         if "/folders/" in final_url:
             return download_gdrive_folder(final_url, target_dir)
@@ -408,12 +412,11 @@ def download_proof(url: str, target_dir: str) -> bool:
             if match:
                 return download_single_gdrive_file(match.group(1), target_dir)
 
-    # Link trực tiếp (FPT Cloud S3, Tikinow,...)
+    # 2. Link trực tiếp (FPT Cloud S3, Tikinow,...)
     try:
         parsed_url = urllib.parse.urlparse(final_url)
         path_name = os.path.basename(parsed_url.path)
         
-        # Lấy tên file gốc chuẩn xác
         if path_name and ("." in path_name):
             save_name = path_name
         else:
@@ -507,7 +510,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     total_size = sum(x["size"] for x in final_files)
     file_count = len(final_files)
 
-    # ---------------- THẺ 1: ĐÚNG CHUẨN TỪNG GAM MÀU & THỤT DÒNG CỦA CHỊ ----------------
+    # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU THEO ĐÚNG MẪU CHỊ YÊU CẦU ----------------
     file_lines = []
     for item in final_files:
         file_lines.append(f"<font color='carmine'>╰┄‌• </font> {item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -516,12 +519,13 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     header_block = (
         f"*<font color='turquoise'>          ≽^•⩊•^≼  </font>*\n"
         f"*<font color='turquoise'> ✧; Ｗｅｌｃｏｍｅ ;✧</font>*\n\n"
-        f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-        f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
-        f"          ╰┄▸ 🗂️<text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
+        f"🎫 <text_tag color='turquoise'>{ticket_id}</text_tag>\n"
+        f"      ╰┄▸ 💾 <text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
+        f"                ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
         f"• 🎬 : {file_count} file\n"
         f"{files_str}\n\n"
-        f"⌛*<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O%</text_tag>*\n"
+        f"⌛ *<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．</text_tag>*\n"
+        f"*<text_tag color='yellow'>███████▒▒▒ 8O %</text_tag>*"
     )
 
     report_card_payload = {
@@ -537,13 +541,12 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     # ---------------- GỬI TỆP VÀO THREAD ----------------
     upload_and_send_batch_proofs(message_id, final_files)
 
-    # ---------------- THẺ 2: KẾT QUẢ VỚI LEVEL 3 HEADING & THANK YOU CÂN ĐỐI 100% ----------------
+    # ---------------- THẺ 2: KẾT QUẢ VỚI LEVEL 3 HEADING & THANK YOU CĂN GIỮA TUYỆT ĐỐI ----------------
     rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
     title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
     
     sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
     
-    # Heading Level 3 thuần túy chuẩn cú pháp Markdown Lark
     heading_md = f"### ♡ {sender_mention} ơi...\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
 
     finish_card_payload = {
@@ -565,15 +568,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": "<font color='turquoise'>┊ t h a n k y o u ┊</font>"
-                },
-                "text_align": "center"
-            },
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": "<font color='turquoise'>┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+                    "content": "<font color='turquoise'>┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
                 },
                 "text_align": "center"
             }
