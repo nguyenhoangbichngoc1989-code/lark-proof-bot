@@ -36,10 +36,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = os.path.join(BASE_DIR, "temp_files")
 ERROR_IMG_PATH = os.path.join(BASE_DIR, "gdrive_error.png")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
-FFMPEG_BIN = "ffmpeg"
 
 PROCESSED_MESSAGES = set()
-THREAD_MENTIONS_CACHE = {}
 
 global_session = requests.Session()
 retries = Retry(total=2, backoff_factor=0.3, status_forcelist=[500, 502, 503, 504])
@@ -166,62 +164,29 @@ def send_text_message(receive_id: str, text: str, receive_id_type: str = "open_i
 
 # ----------------- 4. NÉN VIDEO & XỬ LÝ MEDIA -----------------
 def compress_video_if_large(video_path: str) -> str:
-    size_mb = os.path.getsize(video_path) / (1024 * 1024)
-    if size_mb <= 25.0:
-        return video_path
-
-    name, ext = os.path.splitext(video_path)
-    compressed_path = f"{name}_compressed.mp4"
-
-    cmd = (
-        f'"{FFMPEG_BIN}" -y -threads 2 -i "{video_path}" '
-        f'-vf "scale=\'min(480,iw)\':-2,fps=20" '
-        f'-c:v libx264 -preset ultrafast -crf 32 '
-        f'-c:a aac -b:a 32k -ac 1 '
-        f'"{compressed_path}"'
-    )
     try:
-        subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+        size_mb = os.path.getsize(video_path) / (1024 * 1024)
+        if size_mb <= 24.5:
+            return video_path
+
+        name, ext = os.path.splitext(video_path)
+        compressed_path = f"{name}_cmp.mp4"
+
+        cmd = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-vf", "scale='min(640,iw)':-2,fps=24",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30",
+            "-c:a", "aac", "-b:a", "64k",
+            compressed_path
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=240)
         gc.collect()
+
         if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
             return compressed_path
     except Exception as e:
-        print(f"Lỗi nén video: {e}")
+        print(f"Lưu ý nén video: {e}")
     return video_path
-
-def convert_single_file(file_path: str) -> list[str]:
-    name, ext = os.path.splitext(file_path)
-    ext_lower = ext.lower()
-
-    if ext_lower == ".zip":
-        try:
-            os.remove(file_path)
-        except Exception:
-            pass
-        return []
-
-    if ext_lower == ".jfif":
-        out_path = f"{name}.jpg"
-        try:
-            with Image.open(file_path) as img:
-                img.convert("RGB").save(out_path, "JPEG", quality=85)
-            os.remove(file_path)
-            return [out_path]
-        except Exception:
-            return [file_path]
-
-    if ext_lower in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
-        try:
-            with Image.open(file_path) as img:
-                img.verify()
-        except Exception:
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
-            return []
-
-    return [file_path]
 
 def upload_file_direct(file_path: str, file_type: str) -> str:
     token = get_tenant_access_token()
@@ -244,16 +209,16 @@ def upload_file_direct(file_path: str, file_type: str) -> str:
                 if body.get("code") == 0:
                     return body["data"]["file_key"]
     except Exception as e:
-        print(f"Lỗi upload: {e}")
+        print(f"Lỗi upload trực tiếp: {e}")
     return ""
 
 def upload_and_send_batch_proofs(message_id: str, final_files: list):
-    try:
-        image_keys = []
-        for f in final_files:
-            file_path = f["path"]
-            file_ext = f["ext"]
+    for f in final_files:
+        file_path = f["path"]
+        file_ext = f["ext"]
+        file_name = f["name"]
 
+        try:
             if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
                 with open(file_path, "rb") as img_f:
                     create_req = CreateImageRequest.builder() \
@@ -261,41 +226,37 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                         .build()
                     create_resp = client.im.v1.image.create(create_req)
                     if create_resp and create_resp.success():
-                        image_keys.append(create_resp.data.image_key)
+                        img_k = create_resp.data.image_key
+                        body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
+                        client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
 
-        for img_k in image_keys:
-            body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
-            client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
-
-        for f in final_files:
-            file_path = f["path"]
-            file_ext = f["ext"]
-
-            if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
-                continue
-
-            if file_ext in [".mp4", ".mov"]:
-                upload_path = compress_video_if_large(file_path)
-                media_key = upload_file_direct(upload_path, "mp4")
+            elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
+                send_path = compress_video_if_large(file_path)
+                
+                # Gửi khung video
+                media_key = upload_file_direct(send_path, "mp4")
                 if media_key:
                     media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(media_body).build())
 
-                stream_key = upload_file_direct(upload_path, "stream")
+                # Gửi tệp đính kèm
+                stream_key = upload_file_direct(send_path, "stream")
                 if stream_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": stream_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+
             else:
                 file_key = upload_file_direct(file_path, "stream")
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
 
-        gc.collect()
-    except Exception as e:
-        print(f"Lỗi xử lý gửi media: {e}")
+        except Exception as e:
+            print(f"Lỗi khi gửi tệp {file_name} vào thread: {e}")
 
-# ----------------- 5. GIẢI MÃ LINK RÚT GỌN & GOOGLE DRIVE (HỖ TRỢ FOLDER) -----------------
+        gc.collect()
+
+# ----------------- 5. GIẢI MÃ LINK RÚT GỌN & GOOGLE DRIVE FOLDER -----------------
 def resolve_proof_url(url: str) -> str:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -391,7 +352,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     return False
 
 def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
-    """Tải toàn bộ file trong thư mục Google Drive"""
     folder_match = re.search(r'/folders/([a-zA-Z0-9_-]+)', folder_url)
     folder_id = folder_match.group(1) if folder_match else ""
     clean_url = f"https://drive.google.com/drive/folders/{folder_id}" if folder_id else folder_url.split("?")[0]
@@ -462,7 +422,6 @@ def download_proof(url: str, target_dir: str) -> bool:
 
 # ----------------- 6. BÓC TÁCH NỘI DUNG TEXT VÀ POST RICH TEXT -----------------
 def extract_message_text(message: dict) -> str:
-    """Bóc tách toàn bộ chuỗi ký tự từ cả dạng tin nhắn 'text' lẫn 'post' (Rich Text)"""
     msg_type = message.get("message_type", "")
     content_raw = message.get("content", "{}")
 
@@ -493,7 +452,7 @@ def extract_message_text(message: dict) -> str:
 
     return ""
 
-# ----------------- 7. XỬ LÝ TIN NHẮN & RENDER 2 THẺ ĐỊNH DẠNG CHUẨN -----------------
+# ----------------- 7. XỬ LÝ TIN NHẮN & RENDER 2 THẺ ĐỊNH DẠNG HOÀN HẢO -----------------
 def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     urls = re.findall(r'https?://[^\s<>"]+', text)
     order_match = re.search(r"\b(\d{15,21})\b", text)
@@ -533,21 +492,22 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     total_size = sum(x["size"] for x in final_files)
     file_count = len(final_files)
 
-    # ---------------- THẺ 1: ĐÚNG FORMAT MÀU, CÂN ĐỐI & THANH TIẾN TRÌNH NGHỆ THUẬT ----------------
+    # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU THEO ĐÚNG FORMAT MÀU CHỊ GỬI ----------------
     file_lines = []
     for item in final_files:
-        file_lines.append(f"     <font color='carmine'>╰┄‌• </font> {item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
+        file_lines.append(f"<font color='carmine'>╰┄‌• </font> {item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
     files_str = "\n".join(file_lines)
 
     header_block = (
+        f"*<font color='turquoise'>      ≽^•⩊•^≼  </font>*\n"
+        f"*<font color='turquoise'> ✧; Ｗｅｌｃｏｍｅ ;✧</font>*\n\n"
         f"🎫 <text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-        f"             ╰┄▸ 💾 <text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
-        f"                            ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
+        f"   ╰┄▸ 💾 <text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
+        f"          ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
         f"• 🎬 : {file_count} file\n"
         f"{files_str}\n\n"
-        f"*<font color='turquoise'> ≽^•⩊•^≼ </font>* *<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．</text_tag>*\n"
-        f"*<text_tag color='yellow'>8O %</text_tag>*\n"
-        f"*<text_tag color='yellow'>███████▒▒▒</text_tag>*"
+        f"⌛ *<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．</text_tag>*"
+        f"*<text_tag color='yellow'>███████▒▒▒ 8O %</text_tag>*"
     )
 
     report_card_payload = {
@@ -563,13 +523,17 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     # ---------------- GỬI TỆP VÀO THREAD ----------------
     upload_and_send_batch_proofs(message_id, final_files)
 
-    # ---------------- THẺ 2: KẾT QUẢ VỚI LEVEL 3 HEADING & BỐ CỤC CHUẨN ----------------
+    # ---------------- THẺ 2: KẾT QUẢ VỚI LEVEL 3 HEADING & THANK YOU CĂN GIỮA TUYỆT ĐỐI ----------------
     rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
     title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
     
     sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
-    heading_md = f"### <font color='carmine'>♡</font> {sender_mention} ơi...\n     ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*\n"
-    thankyou_center_md = "<font color='turquoise'> ┊t h a n k y o u┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+    
+    # LEVEL 3 HEADING CHUẨN: ### đứng đầu dòng, chữ to, rõ, không bị lỗi text thô ###
+    heading_md = (
+        f"### ♡ {sender_mention} ơi...\n"
+        f"╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
+    )
 
     finish_card_payload = {
         "elements": [
@@ -582,8 +546,18 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
                     {"tag": "column", "width": "weighted", "weight": 1, "elements": [{"tag": "markdown", "content": title_side_md}]}
                 ]
             },
-            {"tag": "markdown", "content": heading_md},
-            {"tag": "div", "text": {"tag": "lark_md", "content": thankyou_center_md}, "text_align": "center"}
+            {
+                "tag": "markdown",
+                "content": heading_md
+            },
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "<font color='turquoise'>┊t h a n k y o u┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+                },
+                "text_align": "center"
+            }
         ]
     }
     reply_thread_card(message_id, finish_card_payload)
@@ -601,7 +575,6 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         chat_id = msg.chat_id or ""
         sender_id = data.event.sender.sender_id.open_id if (data.event.sender and data.event.sender.sender_id) else ""
 
-        # Bóc tách nội dung của cả tin nhắn text và post (có link preview)
         msg_dict = {"message_type": msg.message_type, "content": msg.content}
         text = extract_message_text(msg_dict)
 
@@ -630,15 +603,22 @@ def handle_menu_click(data: dict) -> None:
     except Exception as e:
         print(f"Lỗi menu click: {e}")
 
+def silent_ignored_handler(data) -> None:
+    pass
+
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF (SẴN SÀNG NHẬN LINK TEXT & POST PREVIEW)...")
+    print("🚀 BOT LARK PROOF (FORMAT GIAO DIỆN & LEVEL 3 HEADING HOÀN THIỆN)...")
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
     builder.register_p2_application_bot_menu_v6(lambda d: handle_menu_click(json.loads(lark.JSON.marshal(d))))
+    
     event_handler = builder.build()
+
+    if hasattr(event_handler, "_handlers"):
+        event_handler._handlers["im.message.updated_v1"] = silent_ignored_handler
 
     ws_client = lark.ws.Client(
         app_id=APP_ID,
