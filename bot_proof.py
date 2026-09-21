@@ -27,8 +27,9 @@ import pillow_heif
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pillow_heif.register_heif_opener()
 
-APP_ID = os.environ.get("APP_ID", "")
-APP_SECRET = os.environ.get("APP_SECRET", "")
+# Tự động nhận diện linh hoạt tên biến môi trường trên Render
+APP_ID = os.environ.get("APP_ID", "") or os.environ.get("LARK_APP_ID", "")
+APP_SECRET = os.environ.get("APP_SECRET", "") or os.environ.get("LARK_APP_SECRET", "")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = os.path.join(BASE_DIR, "temp_files")
@@ -145,14 +146,32 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
+def send_text_message(receive_id: str, text: str, receive_id_type: str = "open_id"):
+    try:
+        token = get_tenant_access_token()
+        if not token:
+            return
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        payload = {
+            "receive_id": receive_id,
+            "msg_type": "text",
+            "content": json.dumps({"text": text})
+        }
+        global_session.post(
+            f"https://open.larksuite.com/open-apis/im/v1/messages?receive_id_type={receive_id_type}",
+            headers=headers,
+            json=payload,
+            timeout=10
+        )
+    except Exception as e:
+        print(f"Lỗi gửi tin nhắn text: {e}")
+
 # ----------------- NÉN VIDEO SIÊU TỐC & KHÔNG TIMEOUT -----------------
 def compress_video_if_large(video_path: str) -> str:
     size_mb = os.path.getsize(video_path) / (1024 * 1024)
     if size_mb <= 25.0:
-        print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) <= 25MB, gửi trực tiếp!")
         return video_path
 
-    print(f"⚡ Video {os.path.basename(video_path)} ({size_mb:.2f}MB) vượt 25MB. Đang nén tối ưu CPU...")
     name, ext = os.path.splitext(video_path)
     compressed_path = f"{name}_compressed.mp4"
 
@@ -167,8 +186,6 @@ def compress_video_if_large(video_path: str) -> str:
         subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
         gc.collect()
         if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
-            compressed_mb = os.path.getsize(compressed_path) / (1024 * 1024)
-            print(f"✅ Đã nén video thành công về {compressed_mb:.2f}MB.")
             return compressed_path
     except Exception as e:
         print(f"Lỗi nén video: {e}")
@@ -176,7 +193,6 @@ def compress_video_if_large(video_path: str) -> str:
 
 # ----------------- TẢI VIDEO TỪ YOUTUBE / SHORTS -----------------
 def download_youtube_video(url: str, target_dir: str) -> bool:
-    print(f"▶️ Đang tải video từ YouTube/Shorts: {url}")
     try:
         import yt_dlp
         output_template = os.path.join(target_dir, "youtube_video.mp4")
@@ -191,7 +207,6 @@ def download_youtube_video(url: str, target_dir: str) -> bool:
 
         for f in os.listdir(target_dir):
             if f.startswith("youtube_video") and os.path.getsize(os.path.join(target_dir, f)) > 1000:
-                print(f"📥 Tải thành công video YouTube: {f} ({format_size(os.path.getsize(os.path.join(target_dir, f)))})")
                 return True
     except Exception as e:
         print(f"Lỗi tải YouTube video: {e}")
@@ -216,10 +231,8 @@ def convert_single_file(file_path: str) -> list[str]:
             with Image.open(file_path) as img:
                 img.convert("RGB").save(out_path, "JPEG", quality=85)
             os.remove(file_path)
-            print(f"🖼️ Đã chuyển đổi tệp {os.path.basename(file_path)} (.jfif) sang JPEG!")
             return [out_path]
-        except Exception as e:
-            print(f"Lỗi chuyển .jfif sang jpeg: {e}")
+        except Exception:
             return [file_path]
 
     if ext_lower in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
@@ -255,11 +268,9 @@ def convert_single_file(file_path: str) -> list[str]:
                 page_path = f"{name}_trang_{i+1}.png"
                 image.save(page_path, "PNG")
                 converted_files.append(page_path)
-            print(f"📄 Đã bung {len(converted_files)} trang PDF thành ảnh PNG trực tiếp!")
             converted_files.append(file_path)
             return converted_files
-        except Exception as e:
-            print(f"Lỗi render PDF: {e}")
+        except Exception:
             return [file_path]
 
     elif ext_lower == ".heic":
@@ -310,22 +321,15 @@ def upload_file_direct(file_path: str, file_type: str) -> str:
                 body = res.json()
                 if body.get("code") == 0:
                     return body["data"]["file_key"]
-                else:
-                    print(f"❌ Lark API Error ({file_type}): Code={body.get('code')} | Msg={body.get('msg')}")
-            else:
-                print(f"❌ HTTP Error {res.status_code} khi tải {safe_name}")
     except Exception as e:
         print(f"Lỗi upload: {e}")
     return ""
 
 def upload_and_send_batch_proofs(message_id: str, final_files: list):
     try:
-        print(f"🚀 Bắt đầu đẩy gộp {len(final_files)} tệp vào Thread...")
-        
         image_keys = []
         for f in final_files:
             file_path = f["path"]
-            file_name = f["name"]
             file_ext = f["ext"]
 
             if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
@@ -336,7 +340,6 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                     create_resp = client.im.v1.image.create(create_req)
                     if create_resp and create_resp.success():
                         image_keys.append(create_resp.data.image_key)
-                        print(f"✅ Đã upload ảnh: {file_name}")
 
         for img_k in image_keys:
             body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
@@ -344,7 +347,6 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
 
         for f in final_files:
             file_path = f["path"]
-            file_name = f["name"]
             file_ext = f["ext"]
 
             if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
@@ -357,13 +359,11 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                 if media_key:
                     media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(media_body).build())
-                    print(f"🎬 Đã gửi khung phát video: {file_name}")
 
                 stream_key = upload_file_direct(upload_path, "stream")
                 if stream_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": stream_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
-                    print(f"📥 Đã gửi tệp đính kèm video: {file_name}")
 
                 gc.collect()
             else:
@@ -371,14 +371,12 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
-                    print(f"📎 Đã gửi tệp: {file_name}")
 
         gc.collect()
-
     except Exception as e:
         print(f"Lỗi xử lý gửi gộp media: {e}")
 
-# ----------------- TẢI GOOGLE DRIVE TỐC ĐỘ CAO (BUFFER 8MB) -----------------
+# ----------------- TẢI GOOGLE DRIVE TỐC ĐỘ CAO & GIẢI MÃ LINK RÚT GỌN -----------------
 def check_gdrive_error(url: str) -> bool:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -388,7 +386,6 @@ def check_gdrive_error(url: str) -> bool:
     except Exception:
         return False
 
-# HÀM GIẢI MÃ LINK RÚT GỌN (ACESSE.ONE, ENCURTADOR.DEV, BOM.SO,...)
 def resolve_proof_url(url: str) -> str:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -396,7 +393,6 @@ def resolve_proof_url(url: str) -> str:
     }
     cur_url = url
 
-    # 1. Bóc tách trực tiếp API nếu là acesse.one / encurtador.dev
     if "acesse.one" in cur_url or "encurtador.dev" in cur_url:
         try:
             code = cur_url.rstrip("/").split("/")[-1]
@@ -406,12 +402,18 @@ def resolve_proof_url(url: str) -> str:
                 data = r_api.json()
                 dest = data.get("link", {}).get("destination") or data.get("destination") or data.get("url")
                 if dest:
-                    print(f"🔗 Bóc tách thành công API encurtador: {dest}")
                     return dest
         except Exception:
             pass
 
-    # 2. Vòng lặp giải mã chuyển hướng qua thẻ meta / javascript
+    if "bom.so" in cur_url:
+        try:
+            r_bom = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
+            if r_bom.url != cur_url:
+                return r_bom.url
+        except Exception:
+            pass
+
     for _ in range(4):
         try:
             r = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=12, verify=False)
@@ -422,7 +424,6 @@ def resolve_proof_url(url: str) -> str:
                 return cur_url
 
             html = r.text
-
             meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', html, re.IGNORECASE)
             if meta_match:
                 cur_url = urllib.parse.urljoin(cur_url, meta_match.group(1).replace("&amp;", "&"))
@@ -437,13 +438,11 @@ def resolve_proof_url(url: str) -> str:
         except Exception:
             break
 
-    print(f"🔗 Link sau khi giải mã: {cur_url}")
     return cur_url
 
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
     save_name = preferred_name or f"gdrive_{file_id}.mp4"
     save_path = os.path.join(target_dir, save_name)
-    print(f"📥 Đang tải Google Drive ID: {file_id} ...")
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -477,7 +476,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
                     if chunk:
                         f.write(chunk)
             if os.path.exists(save_path) and os.path.getsize(save_path) > 2000:
-                print(f"📥 Tải thành công: {save_name} ({format_size(os.path.getsize(save_path))})")
                 return True
     except Exception as e:
         print(f"Session download: {e}")
@@ -486,7 +484,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
         import gdown
         output = gdown.download(id=file_id, output=save_path, quiet=True)
         if output and os.path.exists(output) and os.path.getsize(output) > 2000:
-            print(f"📥 [gdown id] Tải thành công: {os.path.basename(output)} ({format_size(os.path.getsize(output))})")
             return True
     except Exception:
         pass
@@ -494,7 +491,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     return False
 
 def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
-    print(f"📂 Đang xử lý tải Folder Google Drive: {folder_url}")
     folder_match = re.search(r'/folders/([a-zA-Z0-9_-]+)', folder_url)
     folder_id = folder_match.group(1) if folder_match else ""
     clean_folder_url = f"https://drive.google.com/drive/folders/{folder_id}" if folder_id else folder_url.split("?")[0]
@@ -503,14 +499,11 @@ def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
         import gdown
         downloaded = gdown.download_folder(clean_folder_url, output=target_dir, quiet=True, use_cookies=False)
         if downloaded and len(downloaded) > 0:
-            print(f"✅ [gdown] Đã tải thành công {len(downloaded)} tệp từ thư mục Google Drive!")
             return True
     except Exception:
         pass
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
         res = global_session.get(clean_folder_url, headers=headers, timeout=20, verify=False)
         if res.status_code == 200:
@@ -523,175 +516,20 @@ def download_gdrive_folder_files(folder_url: str, target_dir: str) -> bool:
                 if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".avi", ".mkv", ".jpg", ".png", ".jpeg", ".webp", ".pdf"]):
                     found_files[fid] = fname_clean
 
-            if not found_files:
-                matches_alt = re.findall(r'\["([a-zA-Z0-9_-]{28,45})","([^"]+)"', html)
-                for fid, fname in matches_alt:
-                    fname_clean = clean_file_display_name(fname)
-                    if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".jpg", ".png", ".jpeg", ".webp", ".pdf"]):
-                        found_files[fid] = fname_clean
-
-            if not found_files:
-                raw_ids = set(re.findall(r'["\']([a-zA-Z0-9_-]{28,40})["\']', html))
-                idx = 1
-                for rid in raw_ids:
-                    if rid != folder_id:
-                        found_files[rid] = f"gdrive_item_{idx}"
-                        idx += 1
-
             if found_files:
-                print(f"📂 Đã tìm thấy {len(found_files)} tệp trong Folder Google Drive. Đang tải...")
                 success_count = 0
                 for fid, fname in found_files.items():
                     if download_single_gdrive_file(fid, target_dir, fname):
                         success_count += 1
                 return success_count > 0
-
     except Exception as e:
         print(f"Lỗi phân tích Folder GDrive: {e}")
 
     return False
 
-# ----------------- TẢI FILE SHAREPOINT / ONEDRIVE -----------------
-def extract_all_zips(target_dir: str):
-    has_zip = True
-    while has_zip:
-        has_zip = False
-        for root, _, files in os.walk(target_dir):
-            for file in files:
-                if file.lower().endswith(".zip"):
-                    zip_p = os.path.join(root, file)
-                    try:
-                        if zipfile.is_zipfile(zip_p) and os.path.getsize(zip_p) > 200:
-                            print(f"📦 Đang giải nén: {file} ({format_size(os.path.getsize(zip_p))})...")
-                            with zipfile.ZipFile(zip_p, 'r') as zf:
-                                zf.extractall(target_dir)
-                            has_zip = True
-                        os.remove(zip_p)
-                    except Exception:
-                        try:
-                            os.remove(zip_p)
-                        except Exception:
-                            pass
-
-def download_onedrive_sharepoint(url: str, target_dir: str) -> bool:
-    print(f"☁️ Đang xử lý link OneDrive/SharePoint: {url}")
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "*/*"
-    }
-
-    try:
-        parsed = urllib.parse.urlparse(url)
-        base_domain = f"{parsed.scheme}://{parsed.netloc}"
-
-        r_page = global_session.get(url, headers=headers, timeout=25, verify=False, allow_redirects=True)
-        final_page_url = r_page.url
-
-        zip_download_urls = []
-        user_match = re.search(r'(/personal/[^/]+)', final_page_url) or re.search(r'(/personal/[^/]+)', url)
-        web_path = user_match.group(1) if user_match else ""
-
-        token_match = re.search(r'/:f:/p/[^/]+/([a-zA-Z0-9_-]+)', url) or re.search(r'/:f:/p/[^/]+/([a-zA-Z0-9_-]+)', final_page_url)
-        share_token = token_match.group(1) if token_match else ""
-
-        if share_token and web_path:
-            zip_download_urls.append(f"{base_domain}{web_path}/_layouts/15/download.aspx?share={share_token}")
-            zip_download_urls.append(f"{base_domain}/_layouts/15/download.aspx?share={share_token}")
-
-        if "download=1" not in final_page_url:
-            sep = "&" if "?" in final_page_url else "?"
-            zip_download_urls.append(f"{final_page_url}{sep}download=1")
-        else:
-            zip_download_urls.append(final_page_url)
-
-        for dl_url in zip_download_urls:
-            try:
-                bundle_path = os.path.join(target_dir, "share_bundle.zip")
-                b_res = global_session.get(dl_url, headers=headers, stream=True, timeout=120, verify=False)
-                if b_res.status_code == 200:
-                    c_type = b_res.headers.get("Content-Type", "").lower()
-                    if "text/html" not in c_type:
-                        with open(bundle_path, "wb") as f:
-                            for chunk in b_res.iter_content(chunk_size=8 * 1024 * 1024):
-                                if chunk:
-                                    f.write(chunk)
-                        if os.path.exists(bundle_path) and os.path.getsize(bundle_path) > 500 and zipfile.is_zipfile(bundle_path):
-                            print(f"✅ Đã tải gói thư mục thành công ({format_size(os.path.getsize(bundle_path))})")
-                            extract_all_zips(target_dir)
-                            return len(os.listdir(target_dir)) > 0
-                        elif os.path.exists(bundle_path) and os.path.getsize(bundle_path) > 500:
-                            return True
-            except Exception as e:
-                print(f"Lỗi tải bundle {dl_url}: {e}")
-
-        clean_share_url = url.split("?")[0]
-        encoded = base64.b64encode(clean_share_url.encode('utf-8')).decode('utf-8')
-        sharing_token_b64 = "u!" + encoded.rstrip('=').replace('/', '_').replace('+', '-')
-
-        api_endpoints = [
-            f"{base_domain}/_api/v2.0/shares/{sharing_token_b64}/driveItem/children",
-            f"https://api.onedrive.com/v1.0/shares/{sharing_token_b64}/root/children"
-        ]
-
-        for ep in api_endpoints:
-            try:
-                res = global_session.get(ep, headers={**headers, "Accept": "application/json"}, timeout=20, verify=False)
-                if res.status_code == 200:
-                    data = res.json()
-                    items = data.get("value", [])
-                    if items:
-                        downloaded = 0
-                        for it in items:
-                            fname = clean_file_display_name(it.get("name", f"file_{downloaded}"))
-                            dl_url = it.get("@microsoft.graph.downloadUrl") or it.get("@content.downloadUrl")
-                            if dl_url:
-                                save_p = os.path.join(target_dir, fname)
-                                f_res = global_session.get(dl_url, headers=headers, stream=True, timeout=90, verify=False)
-                                if f_res.status_code == 200:
-                                    with open(save_p, "wb") as f:
-                                        for chunk in f_res.iter_content(chunk_size=8 * 1024 * 1024):
-                                            if chunk:
-                                                f.write(chunk)
-                                    print(f"📥 Tải thành công: {fname} ({format_size(os.path.getsize(save_p))})")
-                                    downloaded += 1
-                        if downloaded > 0:
-                            extract_all_zips(target_dir)
-                            return True
-            except Exception as e:
-                print(f"Thử API {ep} lỗi: {e}")
-
-    except Exception as e:
-        print(f"Lỗi xử lý OneDrive / SharePoint: {e}")
-
-    extract_all_zips(target_dir)
-    return len(os.listdir(target_dir)) > 0
-
 # ----------------- HÀM TẢI FILE TỔNG HỢP -----------------
 def download_proof(url: str, target_dir: str) -> bool:
     final_url = resolve_proof_url(url)
-    print(f"🌐 Đang xử lý link: {final_url}")
-
-    if "docs.google.com/spreadsheets" in final_url:
-        match = re.search(r'/d/([a-zA-Z0-9-_]+)', final_url)
-        if match:
-            doc_id = match.group(1)
-            export_url = f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=xlsx"
-            res = global_session.get(export_url, verify=False)
-            if res.status_code == 200:
-                with open(os.path.join(target_dir, f"Sheet_{doc_id[:8]}.xlsx"), "wb") as f:
-                    f.write(res.content)
-                return True
-
-    elif "docs.google.com/document" in final_url:
-        match = re.search(r'/d/([a-zA-Z0-9-_]+)', final_url)
-        if match:
-            doc_id = match.group(1)
-            export_url = f"https://docs.google.com/document/d/{doc_id}/export?format=docx"
-            res = global_session.get(export_url, verify=False)
-            if res.status_code == 200:
-                with open(os.path.join(target_dir, f"Doc_{doc_id[:8]}.docx"), "wb") as f:
-                    f.write(res.content)
-                return True
 
     if "drive.google.com" in final_url:
         if "/folders/" in final_url:
@@ -700,12 +538,6 @@ def download_proof(url: str, target_dir: str) -> bool:
             file_id_match = re.search(r'(?:/file/d/|id=)([a-zA-Z0-9_-]+)', final_url)
             if file_id_match:
                 return download_single_gdrive_file(file_id_match.group(1), target_dir)
-
-    if any(kw in final_url.lower() for kw in ["sharepoint.com", "1drv.ms", "onedrive.live.com"]):
-        return download_onedrive_sharepoint(final_url, target_dir)
-
-    if any(kw in final_url.lower() for kw in ["youtube.com", "youtu.be"]):
-        return download_youtube_video(final_url, target_dir)
 
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -730,16 +562,39 @@ def download_proof(url: str, target_dir: str) -> bool:
                 for chunk in res.iter_content(chunk_size=8 * 1024 * 1024):
                     if chunk:
                         f.write(chunk)
-            print(f"📥 Đã tải thành công: {filename}")
             return True
         return False
     except Exception as e:
         print(f"Lỗi tải trực tiếp: {e}")
         return False
 
-# ----------------- HỖ TRỢ CHỨC NĂNG TRANSFER PROOF & FORWARD THREAD -----------------
+# ----------------- XỬ LÝ SỰ KIỆN MENU & TRANSFER PROOF -----------------
+def handle_menu_click(data) -> dict:
+    """Bắt sự kiện khi bấm nút menu 'Send proof' có event_key = trigger_proof_template"""
+    try:
+        raw_body = json.loads(data.event) if isinstance(data.event, str) else data.event
+        event_obj = raw_body.get("event", {})
+        event_key = event_obj.get("event_key", "")
+        
+        operator = event_obj.get("operator", {})
+        operator_id = operator.get("operator_id", {})
+        open_id = operator_id.get("open_id", "") or operator.get("open_id", "")
+
+        if event_key == "trigger_proof_template":
+            template = (
+                "📋 TEMPLATES CHECK PROOF \n\n"
+                "Hãy copy đoạn bên dưới, dán vào ô chat rồi thêm Ticket_ID & link proof nhé:\n\n"
+                "Take proof & hold after confirmation\n"
+                "7686040088400168978\n"
+                "https://bom.so/sf8t5L"
+            )
+            if open_id:
+                send_text_message(open_id, template, receive_id_type="open_id")
+    except Exception as e:
+        print(f"Lỗi xử lý menu click: {e}")
+    return {}
+
 def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, ticket_id: str):
-    print(f"🔄 Bắt đầu bàn giao Transfer Proof cho Ticket: {ticket_id}...")
     token = get_tenant_access_token()
     if not token:
         return
@@ -815,7 +670,6 @@ def execute_transfer_proof(message_id: str, chat_id: str, operator_id: str, tick
                 json=forward_dm_body,
                 timeout=10
             )
-            print(f"✅ Đã gửi tin nhắn riêng điều chuyển đến nhân viên: {target_user_id}")
         except Exception as e:
             print(f"Lỗi gửi tin nhắn riêng cho nhân viên: {e}")
 
@@ -902,8 +756,6 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     for u in proof_urls:
         download_proof(u, task_temp_dir)
 
-    extract_all_zips(task_temp_dir)
-
     final_files = []
     for root, _, fs in os.walk(task_temp_dir):
         for f in fs:
@@ -929,7 +781,6 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
         return
 
     record_successful_request(ticket_id, req_count)
-
     total_size = sum(x["size"] for x in final_files)
 
     categorized = {}
@@ -941,8 +792,6 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
             icon = "🖼️"
         elif ext in [".pdf", ".docx", ".xlsx", ".csv", ".txt"]:
             icon = "📄"
-        elif ext in [".mp3", ".wav"]:
-            icon = "🎵"
         else:
             icon = "📁"
         categorized.setdefault(icon, []).append(x)
@@ -951,7 +800,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     for icon, items in categorized.items():
         type_block_lines.append(f"• {icon}: {len(items)} file")
         for item in items:
-            type_block_lines.append(f"       •  {item['name']}: [{format_size(item['size'])}]")
+            type_block_lines.append(f"        •  {item['name']}: [{format_size(item['size'])}]")
     type_content = "\n".join(type_block_lines)
 
     # THẺ 1: BÁO CÁO BAN ĐẦU
@@ -980,24 +829,14 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
                         "tag": "column",
                         "width": "weighted",
                         "weight": 3,
-                        "elements": [
-                            {
-                                "tag": "markdown",
-                                "content": loading_styled
-                            }
-                        ]
+                        "elements": [{"tag": "markdown", "content": loading_styled}]
                     },
                     {
                         "tag": "column",
                         "width": "weighted",
                         "weight": 2,
                         "horizontal_align": "right",
-                        "elements": [
-                            {
-                                "tag": "markdown",
-                                "content": right_badge_styled
-                            }
-                        ]
+                        "elements": [{"tag": "markdown", "content": right_badge_styled}]
                     }
                 ]
             }
@@ -1005,30 +844,14 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     }
     reply_thread_card(message_id, report_card_payload)
 
-    # GỬI GỘP TẤT CẢ TỆP VÀO THREAD
+    # GỬI TỆP VÀO THREAD
     upload_and_send_batch_proofs(message_id, final_files)
 
-    # THẺ 2: THÔNG BÁO HOÀN TẤT KÈM NÚT TRANSFER PROOF
-    rabbit_side_md = (
-        "<font color='turquoise'>-ˋ (\\ (\\   .\n"
-        ".(„• ֊ •„)\n"
-        "─‌∪─‌∪࿎࿎</font>"
-    )
-
-    title_side_md = (
-        "       <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n"
-        "<text_tag color='turquoise'>-ˋˏ   𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
-    )
-
-    at_middle_md = (
-        f"### <font color='carmine'>♡</font> <at id=\"{sender_id}\"></at> ơi...\n"
-        f"    ╰┄▸🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*\n"
-    )
-
-    thankyou_center_md = (
-        "<font color='turquoise'> ┊t h a n k y o u┊\n"
-        "┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
-    )
+    # THẺ 2: HOÀN TẤT
+    rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
+    title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
+    at_middle_md = f"### <font color='carmine'>♡</font> <at id=\"{sender_id}\"></at> ơi...\n     ╰┄▸🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*\n"
+    thankyou_center_md = "<font color='turquoise'> ┊t h a n k y o u┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
     finish_card_payload = {
         "elements": [
@@ -1037,50 +860,18 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
                 "flex_mode": "none",
                 "background_style": "default",
                 "columns": [
-                    {
-                        "tag": "column",
-                        "width": "auto",
-                        "elements": [
-                            {
-                                "tag": "markdown",
-                                "content": rabbit_side_md
-                            }
-                        ]
-                    },
-                    {
-                        "tag": "column",
-                        "width": "weighted",
-                        "weight": 1,
-                        "elements": [
-                            {
-                                "tag": "markdown",
-                                "content": title_side_md
-                            }
-                        ]
-                    }
+                    {"tag": "column", "width": "auto", "elements": [{"tag": "markdown", "content": rabbit_side_md}]},
+                    {"tag": "column", "width": "weighted", "weight": 1, "elements": [{"tag": "markdown", "content": title_side_md}]}
                 ]
             },
-            {
-                "tag": "markdown",
-                "content": at_middle_md
-            },
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": thankyou_center_md
-                },
-                "text_align": "center"
-            },
+            {"tag": "markdown", "content": at_middle_md},
+            {"tag": "div", "text": {"tag": "lark_md", "content": thankyou_center_md}, "text_align": "center"},
             {
                 "tag": "action",
                 "actions": [
                     {
                         "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": "🚀 Transfer Proof"
-                        },
+                        "text": {"tag": "plain_text", "content": "🚀 Transfer Proof"},
                         "type": "primary",
                         "value": {
                             "action": "transfer_proof",
@@ -1106,7 +897,6 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         if msg.message_id in PROCESSED_MESSAGES:
             return
         PROCESSED_MESSAGES.add(msg.message_id)
-
         if len(PROCESSED_MESSAGES) > 500:
             PROCESSED_MESSAGES.pop()
 
@@ -1131,7 +921,6 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
     except Exception as e:
         print(f"Lỗi handle_message: {e}")
 
-# Xử lý sự kiện bấm nút Transfer Proof
 def handle_card_action(data: lark.CustomizedEvent) -> dict:
     try:
         raw_body = json.loads(data.event) if isinstance(data.event, str) else data.event
@@ -1149,12 +938,7 @@ def handle_card_action(data: lark.CustomizedEvent) -> dict:
                 daemon=True
             ).start()
             
-            return {
-                "toast": {
-                    "type": "info",
-                    "content": "Đang chuyển giao Proof đến nhân viên..."
-                }
-            }
+            return {"toast": {"type": "info", "content": "Đang chuyển giao Proof đến nhân viên..."}}
     except Exception as e:
         print(f"Lỗi xử lý button action: {e}")
     return {}
@@ -1164,7 +948,7 @@ def silent_ignored_handler(data) -> None:
 
 def start_bot():
     print("=" * 60)
-    print("🚀 BOT LARK PROOF (PHIÊN BẢN CLOUD TĂNG TỐC & TRANSFER PROOF 2026)...")
+    print("🚀 BOT LARK PROOF (PHIÊN BẢN CLOUD TĂNG TỐC & MENU EVENT 2026)...")
     print("=" * 60)
     
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
@@ -1172,12 +956,14 @@ def start_bot():
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
     builder.register_p1_customized_event("card.action.trigger", handle_card_action)
+    
+    # Đăng ký bắt sự kiện Push Event từ Menu Bot (application.bot.menu_v6)
+    builder.register_p1_customized_event("application.bot.menu_v6", handle_menu_click)
+    
     event_handler = builder.build()
 
     if hasattr(event_handler, "_handlers"):
         event_handler._handlers["im.message.updated_v1"] = silent_ignored_handler
-    if hasattr(event_handler, "custom_handlers"):
-        event_handler.custom_handlers["im.message.updated_v1"] = silent_ignored_handler
 
     ws_client = lark.ws.Client(
         APP_ID, 
