@@ -21,7 +21,7 @@ import urllib3
 from PIL import Image
 import pillow_heif
 
-# Thử nạp ffmpeg từ static_ffmpeg nếu có, không chặn luồng nếu lỗi
+# Cấu hình an toàn cho static_ffmpeg
 try:
     import static_ffmpeg
     static_ffmpeg.add_paths()
@@ -166,24 +166,28 @@ def send_text_message(receive_id: str, text: str, receive_id_type: str = "open_i
     except Exception as e:
         print(f"Lỗi gửi tin nhắn: {e}")
 
-# ----------------- 4. NÉN VIDEO & XỬ LÝ MEDIA -----------------
+# ----------------- 4. NÉN VIDEO SIÊU NHẸ & AN TOÀN TRÊN RENDER -----------------
 def compress_video_if_large(video_path: str) -> str:
+    """Nén video nếu vượt 24MB, hạn chế tiêu tốn RAM Render để tránh bị treo"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
-        if size_mb <= 24.5:
+        if size_mb <= 24.0:
             return video_path
 
         name, ext = os.path.splitext(video_path)
         compressed_path = f"{name}_cmp.mp4"
 
+        # Cấu hình chuẩn tránh tràn RAM và block I/O
         cmd = [
-            "ffmpeg", "-y", "-i", video_path,
-            "-vf", "scale='min(640,iw)':-2,fps=24",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
-            "-c:a", "aac", "-b:a", "48k",
+            "ffmpeg", "-y", "-nostdin",
+            "-threads", "2",
+            "-i", video_path,
+            "-vf", "scale='min(640,iw)':-2,fps=20",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "34",
+            "-c:a", "aac", "-b:a", "32k", "-ac", "1",
             compressed_path
         ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=240)
+        subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
         gc.collect()
 
         if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
@@ -237,11 +241,13 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_video_if_large(file_path)
                 
+                # Gửi khung video phát trực tiếp
                 media_key = upload_file_direct(send_path, "mp4")
                 if media_key:
                     media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(media_body).build())
 
+                # Gửi tệp đính kèm tải về
                 stream_key = upload_file_direct(send_path, "stream")
                 if stream_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": stream_key})).msg_type("file").reply_in_thread(True).build()
@@ -254,7 +260,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
 
         except Exception as e:
-            print(f"Lỗi khi gửi tệp {file_name} vào thread: {e}")
+            print(f"Lỗi gửi tệp {file_name}: {e}")
 
         gc.collect()
 
@@ -438,7 +444,7 @@ def download_proof(url: str, target_dir: str) -> bool:
 
     return False
 
-# ----------------- 6. BÓC TÁCH NỘI DUNG TEXT VÀ POST RICH TEXT -----------------
+# ----------------- 6. BÓC TÁCH NỘI DUNG TIN NHẮN -----------------
 def extract_message_text(message: dict) -> str:
     msg_type = message.get("message_type", "")
     content_raw = message.get("content", "{}")
@@ -470,7 +476,7 @@ def extract_message_text(message: dict) -> str:
 
     return ""
 
-# ----------------- 7. XỬ LÝ TIN NHẮN & RENDER 2 THẺ ĐỊNH DẠNG CHUẨN ĐẸP -----------------
+# ----------------- 7. XỬ LÝ CHÍNH & PHẢN HỒI THẺ -----------------
 def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     urls = re.findall(r'https?://[^\s<>"]+', text)
     order_match = re.search(r"\b(\d{15,21})\b", text)
@@ -510,7 +516,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     total_size = sum(x["size"] for x in final_files)
     file_count = len(final_files)
 
-    # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU THEO ĐÚNG MẪU CHỊ YÊU CẦU ----------------
+    # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU CHUẨN ĐẸP ----------------
     file_lines = []
     for item in final_files:
         file_lines.append(f"<font color='carmine'>╰┄‌• </font> {item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -541,13 +547,17 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     # ---------------- GỬI TỆP VÀO THREAD ----------------
     upload_and_send_batch_proofs(message_id, final_files)
 
-    # ---------------- THẺ 2: KẾT QUẢ VỚI LEVEL 3 HEADING & THANK YOU CĂN GIỮA TUYỆT ĐỐI ----------------
+    # ---------------- THẺ 2: KẾT QUẢ VỚI LEVEL 3 HEADING & CĂN GIỮA TUYỆT ĐỐI ----------------
     rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
     title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
     
     sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
     
-    heading_md = f"### ♡ {sender_mention} ơi...\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
+    # Cú pháp Level 3 Heading chuẩn Markdown Lark
+    heading_md = f"### ♡ {sender_mention} ơi...\n\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
+    
+    # Khối thank you căn giữa đối xứng tuyệt đối
+    thankyou_md = "<font color='turquoise'>┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
     finish_card_payload = {
         "elements": [
@@ -568,7 +578,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": "<font color='turquoise'>┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+                    "content": thankyou_md
                 },
                 "text_align": "center"
             }
@@ -622,7 +632,7 @@ def silent_ignored_handler(data) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF (FORMAT GIAO DIỆN & LEVEL 3 HEADING HOÀN THIỆN)...")
+    print("🚀 BOT LARK PROOF (PHIÊN BẢN HOÀN THIỆN ĐẦY ĐỦ 2 THẺ & MEDIA)...")
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
     builder = lark.EventDispatcherHandler.builder("", "")
