@@ -20,6 +20,36 @@ import urllib3
 from PIL import Image
 import pillow_heif
 
+# ----------------- 1. MỞ SERVER HTTP NGAY TỨC THÌ ĐỂ RENDER BÁO LIVE -----------------
+class RenderHealthHandler(http.server.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        pass
+
+def run_dummy_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    try:
+        socketserver.TCPServer.allow_reuse_address = True
+        with socketserver.TCPServer(("", port), RenderHealthHandler) as httpd:
+            print(f"🌐 Đã mở cổng HTTP {port} để duy trì Render...")
+            httpd.serve_forever()
+    except Exception as e:
+        print(f"Lưu ý server HTTP: {e}")
+
+threading.Thread(target=run_dummy_web_server, daemon=True).start()
+
 # ----------------- NẠP VÀ CẤP QUYỀN FFMPEG -----------------
 FFMPEG_EXEC = "ffmpeg"
 try:
@@ -42,7 +72,7 @@ except Exception:
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pillow_heif.register_heif_opener()
 
-# ----------------- 1. CẤU HÌNH BIẾN MÔI TRƯỜNG & SDK LARK -----------------
+# ----------------- 2. CẤU HÌNH BIẾN MÔI TRƯỜNG & SDK LARK -----------------
 APP_ID = os.environ.get("APP_ID", "").strip() or os.environ.get("LARK_APP_ID", "").strip()
 APP_SECRET = os.environ.get("APP_SECRET", "").strip() or os.environ.get("LARK_APP_SECRET", "").strip()
 TARGET_DOMAIN = getattr(lark, "LARK_DOMAIN", "https://open.larksuite.com")
@@ -65,33 +95,6 @@ client = lark.Client.builder() \
     .domain(TARGET_DOMAIN) \
     .log_level(lark.LogLevel.INFO) \
     .build()
-
-# ----------------- 2. SERVER HTTP DUY TRÌ RENDER (TỐI ƯU CHO CRON-JOB) -----------------
-class RenderHealthHandler(http.server.BaseHTTPRequestHandler):
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", "2")
-        self.end_headers()
-
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", "2")
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-    def log_message(self, format, *args):
-        pass
-
-def run_dummy_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    try:
-        with socketserver.TCPServer(("", port), RenderHealthHandler) as httpd:
-            print(f"🌐 Đã mở cổng HTTP {port} để duy trì Render...")
-            httpd.serve_forever()
-    except Exception as e:
-        print(f"Lưu ý server HTTP: {e}")
 
 # ----------------- 3. QUẢN LÝ LỊCH SỬ & ĐẾM SỐ LẦN XIN -----------------
 def load_history() -> dict:
@@ -164,7 +167,7 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- CƠ CHẾ THẢ VÀ GỠ REACTION CHUẨN XÁC -----------------
+# ----------------- CƠ CHẾ THẢ VÀ GỠ REACTION -----------------
 def add_reaction_to_message(message_id: str, emoji_type: str) -> str:
     token = get_tenant_access_token()
     if not token or not message_id:
@@ -181,7 +184,7 @@ def add_reaction_to_message(message_id: str, emoji_type: str) -> str:
         if res.status_code == 200:
             body = res.json()
             rx_id = body.get("data", {}).get("reaction_id", "")
-            print(f"✨ Auto reaction [{emoji_type}] thành công vào tin nhắn")
+            print(f"✨ Auto reaction [{emoji_type}] vào message_id: {message_id}")
             return rx_id
     except Exception as e:
         print(f"Lỗi gọi API reaction: {e}")
@@ -330,7 +333,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK THÔNG MINH -----------------
+# ----------------- 5. GIẢI MÃ LINK & TẢI AN TOÀN TUYỆT ĐỐI (KHÔNG TRÀN RAM) -----------------
 def resolve_proof_url(url: str) -> str:
     if any(ext in url.lower() for ext in [".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm"]):
         return url
@@ -394,25 +397,29 @@ def resolve_proof_url(url: str) -> str:
     return cur_url
 
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
+    """Tải tệp từ Google Drive với cơ chế Streaming tuyệt đối an toàn bộ nhớ (không nạp vào RAM)"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     try:
         url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=20)
+        res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=25)
         
         confirm_token = None
         for k, v in res.cookies.items():
             if k.startswith("download_warning"):
                 confirm_token = v
                 break
-        if not confirm_token:
+
+        # CHỈ ĐỌC res.text KHI CHẮC CHẮN ĐÂY LÀ TRANG WEB HTML (tránh nạp nhị phân video vào RAM gây sập bot)
+        content_type = res.headers.get("Content-Type", "").lower()
+        if not confirm_token and "text/html" in content_type:
             m = re.search(r'confirm=([0-9A-Za-z_]+)', res.text)
             if m:
                 confirm_token = m.group(1)
 
         if confirm_token:
             url = f"https://drive.google.com/uc?export=download&confirm={confirm_token}&id={file_id}"
-            res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=90)
+            res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=120)
 
         content_disposition = res.headers.get("Content-Disposition", "")
         extracted_name = ""
@@ -429,11 +436,13 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
         save_path = os.path.join(target_dir, clean_save_name)
 
         if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", ""):
+            # Ghi ra đĩa theo từng khối nhỏ 1MB (RAM luôn duy trì < 50MB)
             with open(save_path, "wb") as f:
-                for chunk in res.iter_content(chunk_size=4 * 1024 * 1024):
+                for chunk in res.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         f.write(chunk)
             if os.path.exists(save_path) and os.path.getsize(save_path) > 2000:
+                print(f"📥 Đã tải Drive thành công: {clean_save_name} ({format_size(os.path.getsize(save_path))})")
                 return True
     except Exception as e:
         print(f"Lỗi tải Drive: {e}")
@@ -524,7 +533,7 @@ def download_proof(url: str, target_dir: str) -> bool:
 
         if res.status_code == 200:
             with open(save_path, "wb") as f:
-                for chunk in res.iter_content(chunk_size=4 * 1024 * 1024):
+                for chunk in res.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         f.write(chunk)
             
@@ -756,17 +765,14 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF (TỐI ƯU SIÊU TỐC & KHÔNG NGHẼN CPU)...")
-    threading.Thread(target=run_dummy_web_server, daemon=True).start()
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TỐI ƯU BỘ NHỚ RAM CHỐNG SẬP)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
+    # Đăng ký chính thức sự kiện update để không bao giờ bị log đỏ
+    builder.register_p2_im_message_updated_v1(lambda data: None)
     
     event_handler = builder.build()
-
-    # Chặn ngầm log đỏ im.message.updated_v1
-    if hasattr(event_handler, "_handlers"):
-        event_handler._handlers["im.message.updated_v1"] = lambda d: None
 
     ws_client = lark.ws.Client(
         app_id=APP_ID,
