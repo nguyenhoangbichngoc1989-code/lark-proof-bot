@@ -131,7 +131,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
+        return f"{size_bytes / (1024 * 1024):.2f} KB"
     return f"{size_bytes} B"
 
 def sanitize_filename(filename: str) -> str:
@@ -397,7 +397,6 @@ def resolve_proof_url(url: str) -> str:
     return cur_url
 
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
-    """Tải tệp từ Google Drive với cơ chế Streaming tuyệt đối an toàn bộ nhớ (không nạp vào RAM)"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     try:
@@ -410,7 +409,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
                 confirm_token = v
                 break
 
-        # CHỈ ĐỌC res.text KHI CHẮC CHẮN ĐÂY LÀ TRANG WEB HTML (tránh nạp nhị phân video vào RAM gây sập bot)
         content_type = res.headers.get("Content-Type", "").lower()
         if not confirm_token and "text/html" in content_type:
             m = re.search(r'confirm=([0-9A-Za-z_]+)', res.text)
@@ -436,7 +434,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
         save_path = os.path.join(target_dir, clean_save_name)
 
         if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", ""):
-            # Ghi ra đĩa theo từng khối nhỏ 1MB (RAM luôn duy trì < 50MB)
             with open(save_path, "wb") as f:
                 for chunk in res.iter_content(chunk_size=1024 * 1024):
                     if chunk:
@@ -589,7 +586,6 @@ def extract_message_text(message: dict) -> str:
 def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: list, sender_id: str):
     print(f"📥 BẮT ĐẦU XỬ LÝ ĐƠN: {ticket_id} (Tổng link: {len(urls)})")
     
-    # ⏰ 1. THẢ NGAY REACTION ĐỒNG HỒ ĐỂ BÁO HIỆU BOT ĐANG CHẠY
     clock_rx_id = add_reaction_to_message(message_id, "AlarmClock")
 
     try:
@@ -769,9 +765,6 @@ def start_bot():
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
-    # Đăng ký chính thức sự kiện update để không bao giờ bị log đỏ
-    builder.register_p2_im_message_updated_v1(lambda data: None)
-    
     event_handler = builder.build()
 
     ws_client = lark.ws.Client(
