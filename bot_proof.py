@@ -19,7 +19,7 @@ import urllib3
 from PIL import Image
 import pillow_heif
 
-# ----------------- NẠP VÀ CẤP QUYỀN THỰC THI FFMPEG -----------------
+# ----------------- NẠP VÀ CẤP QUYỀN FFMPEG -----------------
 FFMPEG_EXEC = "ffmpeg"
 try:
     import static_ffmpeg
@@ -127,14 +127,8 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
-
-def clean_file_display_name(filename: str) -> str:
-    try:
-        return filename.encode('latin1').decode('utf-8')
-    except Exception:
-        return filename
 
 def sanitize_filename(filename: str) -> str:
     nfkd = unicodedata.normalize('NFKD', filename)
@@ -169,27 +163,27 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- 4. NÉN SIÊU NHẸ VÀ CHUYỂN .MOV SANG .MP4 CHUẨN -----------------
+# ----------------- 4. NÉN SIÊU TỐC KHÔNG LỖI ĐƯỜNG DẪN -----------------
 def compress_and_convert_video(video_path: str) -> str:
-    """Đảm bảo mọi tệp .MOV, .MP4 đều được nén về dưới 10MB và dùng chuẩn yuv420p"""
+    """Đổi tên tệp sang ASCII an toàn trước khi nén để ffmpeg không bị kẹt mã tiếng Việt"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         dir_name = os.path.dirname(video_path)
         ext = os.path.splitext(video_path)[1].lower()
 
-        # Tạo đường dẫn đầu vào an toàn không dấu cách
-        safe_in_path = os.path.join(dir_name, "raw_input_video" + ext)
-        if not os.path.exists(safe_in_path):
-            shutil.copy2(video_path, safe_in_path)
+        # Tạo file tạm hoàn toàn không chứa ký tự tiếng Việt
+        safe_in = os.path.join(dir_name, "raw_in" + ext)
+        if not os.path.exists(safe_in):
+            shutil.copy2(video_path, safe_in)
 
-        out_path = os.path.join(dir_name, "proof_compressed.mp4")
+        out_path = os.path.join(dir_name, "safe_out.mp4")
 
-        # Cấu hình nén nhẹ tối đa, loại bỏ nghẽn CPU của Render
+        # Nén siêu nhẹ: 320p, 15fps, crf 38, tắt tiếng để nén cực nhanh trong 3-5 giây
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",
-            "-i", safe_in_path,
-            "-vf", "scale='min(360,iw)':-2",
+            "-threads", "2",
+            "-i", safe_in,
+            "-vf", "scale='min(320,iw)':-2",
             "-r", "15",
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "38",
             "-pix_fmt", "yuv420p",
@@ -198,12 +192,14 @@ def compress_and_convert_video(video_path: str) -> str:
             out_path
         ]
         
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=40)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=35)
         gc.collect()
 
-        if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
-            print(f"⚡ Đã nén video thành công: {os.path.basename(out_path)} ({format_size(os.path.getsize(out_path))})")
-            return out_path
+        if proc.returncode == 0 and os.path.exists(out_path):
+            new_size = os.path.getsize(out_path) / (1024 * 1024)
+            if new_size > 0:
+                print(f"⚡ Đã nén video thành công: {new_size:.2f} MB")
+                return out_path
     except Exception as e:
         print(f"Lỗi nén video: {e}")
     return video_path
@@ -260,7 +256,6 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_and_convert_video(file_path)
 
-                # Upload với file_type là "stream"
                 file_key = upload_lark_file(send_path, "stream")
                 if not file_key:
                     file_key = upload_lark_file(send_path, "mp4")
@@ -279,7 +274,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                 else:
                     print(f"⚠️ Không nhận được file_key cho video: {file_name}")
 
-            # 3. Tệp tài liệu khác
+            # 3. Tệp khác
             else:
                 file_key = upload_lark_file(file_path, "stream")
                 if file_key:
@@ -372,10 +367,14 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
         if "filename=" in content_disposition:
             fn_match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)["\']?', content_disposition)
             if fn_match:
-                extracted_name = urllib.parse.unquote(fn_match.group(1))
+                try:
+                    extracted_name = urllib.parse.unquote(fn_match.group(1))
+                except Exception:
+                    extracted_name = fn_match.group(1)
 
-        save_name = preferred_name or extracted_name or f"gdrive_{file_id}.mp4"
-        save_path = os.path.join(target_dir, save_name)
+        raw_save_name = preferred_name or extracted_name or f"gdrive_{file_id}.mp4"
+        clean_save_name = sanitize_filename(raw_save_name)
+        save_path = os.path.join(target_dir, clean_save_name)
 
         if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", ""):
             with open(save_path, "wb") as f:
@@ -389,7 +388,8 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
     try:
         import gdown
-        fallback_path = os.path.join(target_dir, preferred_name or f"gdrive_{file_id}.mp4")
+        clean_save_name = sanitize_filename(preferred_name or f"gdrive_{file_id}.mp4")
+        fallback_path = os.path.join(target_dir, clean_save_name)
         output = gdown.download(id=file_id, output=fallback_path, quiet=True)
         if output and os.path.exists(output) and os.path.getsize(output) > 2000:
             return True
@@ -420,9 +420,8 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 
             matches = re.findall(r'\["([a-zA-Z0-9_-]{28,45})",\["([^"]+)"', html)
             for fid, fname in matches:
-                fname_clean = clean_file_display_name(fname)
-                if any(ext in fname_clean.lower() for ext in [".jfif", ".mp4", ".mov", ".avi", ".mkv", ".jpg", ".png", ".jpeg", ".webp"]):
-                    found_files[fid] = fname_clean
+                if any(ext in fname.lower() for ext in [".jfif", ".mp4", ".mov", ".avi", ".mkv", ".jpg", ".png", ".jpeg", ".webp"]):
+                    found_files[fid] = fname
 
             if found_files:
                 success_count = 0
@@ -449,7 +448,8 @@ def download_proof(url: str, target_dir: str) -> bool:
     try:
         parsed_url = urllib.parse.urlparse(final_url)
         path_name = os.path.basename(parsed_url.path)
-        save_name = path_name if (path_name and "." in path_name) else f"video_{len(os.listdir(target_dir)) + 1}.mp4"
+        raw_name = path_name if (path_name and "." in path_name) else f"video_{len(os.listdir(target_dir)) + 1}.mp4"
+        save_name = sanitize_filename(raw_name)
         save_path = os.path.join(target_dir, save_name)
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
@@ -515,7 +515,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                 raw_path = os.path.join(root, f)
                 if os.path.getsize(raw_path) > 500:
                     final_files.append({
-                        "name": clean_file_display_name(f),
+                        "name": f,
                         "path": raw_path,
                         "size": os.path.getsize(raw_path),
                         "ext": os.path.splitext(f)[1].lower()
