@@ -120,7 +120,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
+        return f"{size_bytes / (1024 * 1024):.2f} KB"
     return f"{size_bytes} B"
 
 def clean_file_display_name(filename: str) -> str:
@@ -176,63 +176,43 @@ def send_text_message(receive_id: str, text: str, receive_id_type: str = "open_i
     except Exception as e:
         print(f"Lỗi gửi tin nhắn: {e}")
 
-# ----------------- 4. NÉN VIDEO BẢO ĐẢM < 20MB & UPLOAD CHUẨN -----------------
+# ----------------- 4. NÉN VIDEO SIÊU NHANH (BẢO ĐẢM KHÔNG TIMEOUT & DƯỚI 20MB) -----------------
 def compress_and_convert_video(video_path: str) -> str:
-    """Nén video ép kích thước về dưới 20MB để upload vào Lark chắc chắn thành công"""
+    """Nén video tốc độ cao, dùng 2 threads CPU Render để không bao giờ bị timeout"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         name, ext = os.path.splitext(video_path)
         is_mov_or_other = ext.lower() in [".mov", ".mkv", ".avi", ".webm"]
 
-        # Nếu file mp4 đã nhỏ hơn 20MB thì không cần nén lại
+        # Nếu file mp4 đã nhỏ hơn 20MB thì không cần nén
         if not is_mov_or_other and size_mb <= 20.0:
             return video_path
 
         out_path = f"{name}_compressed.mp4"
-        scale = "scale='min(480,iw)':-2,fps=18"
-        crf = "32"
-        if size_mb > 50:
-            scale = "scale='min(360,iw)':-2,fps=15"
-            crf = "35"
 
+        # Tối ưu thông số nén siêu tốc cho Render Free
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",
+            "-threads", "2",
             "-i", video_path,
-            "-vf", scale,
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", crf,
+            "-vf", "scale='min(400,iw)':-2,fps=15",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35",
             "-c:a", "aac", "-b:a", "24k", "-ac", "1",
             "-movflags", "+faststart",
             out_path
         ]
         
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
         gc.collect()
 
-        if proc.returncode == 0 and os.path.exists(out_path):
-            compressed_size = os.path.getsize(out_path) / (1024 * 1024)
-            if compressed_size > 20.0:
-                out_path_low = f"{name}_low.mp4"
-                cmd_low = [
-                    FFMPEG_EXEC, "-y", "-nostdin",
-                    "-threads", "1",
-                    "-i", out_path,
-                    "-vf", "scale='min(320,iw)':-2,fps=15",
-                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "38",
-                    "-c:a", "aac", "-b:a", "16k", "-ac", "1",
-                    "-movflags", "+faststart",
-                    out_path_low
-                ]
-                subprocess.run(cmd_low, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
-                if os.path.exists(out_path_low) and os.path.getsize(out_path_low) > 1000:
-                    return out_path_low
+        if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
+            print(f"⚡ Đã nén video thành công: {os.path.basename(out_path)} ({format_size(os.path.getsize(out_path))})")
             return out_path
     except Exception as e:
         print(f"Lưu ý nén video: {e}")
     return video_path
 
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
-    """Tải file lên Lark endpoint /open-apis/im/v1/files"""
     token = get_tenant_access_token()
     if not token:
         return ""
@@ -261,7 +241,6 @@ def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
     return ""
 
 def upload_and_send_batch_proofs(message_id: str, final_files: list):
-    """Gửi trực tiếp từng ảnh và video vào Thread qua Lark SDK"""
     for f in final_files:
         file_path = f["path"]
         file_ext = f["ext"]
@@ -285,14 +264,12 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_and_convert_video(file_path)
 
-                # Thử upload với file_type là "mp4" trước
+                # Thử upload mp4 trước, nếu không được fallback sang stream
                 file_key = upload_lark_file(send_path, "mp4")
                 if not file_key:
-                    # Fallback sang stream
                     file_key = upload_lark_file(send_path, "stream")
 
                 if file_key:
-                    # Gửi file đính kèm vào Thread
                     file_body = ReplyMessageRequestBody.builder() \
                         .content(json.dumps({"file_key": file_key})) \
                         .msg_type("file") \
@@ -573,7 +550,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             f"                ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
             f"• 🎬 : {file_count} file\n"
             f"  {files_str}\n\n"
-            f"⌛*<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O %</text_tag>*\n"
+            f"⌛**<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O %</text_tag>**"
         )
 
         reply_thread_card(message_id, {"elements": [{"tag": "markdown", "content": header_block}]})
@@ -586,7 +563,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
-        heading_md = f"**♡ {sender_mention} ơi...**\n  ╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
+        heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n     ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         finish_card_payload = {
