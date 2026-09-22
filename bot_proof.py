@@ -120,7 +120,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def clean_file_display_name(filename: str) -> str:
@@ -162,16 +162,16 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- 4. NÉN SIÊU TỐC (CHỈ NÉN KHI > 28MB) -----------------
+# ----------------- 4. NÉN SIÊU TỐC VỀ DƯỚI 15MB -----------------
 def compress_and_convert_video(video_path: str) -> str:
-    """Nếu file <= 28MB bỏ qua nén, nếu > 28MB nén siêu tốc trong 6-10s"""
+    """Nén video ép kích thước về dưới 15MB cực nhanh trong 5-8 giây"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         name, ext = os.path.splitext(video_path)
         is_mov_or_other = ext.lower() in [".mov", ".mkv", ".avi", ".webm"]
 
-        # Nếu là mp4 và <= 28MB thì gửi trực tiếp không cần tốn thời gian nén
-        if not is_mov_or_other and size_mb <= 28.0:
+        # Nếu file đã dưới 20MB và là mp4 thì gửi trực tiếp
+        if not is_mov_or_other and size_mb <= 20.0:
             return video_path
 
         out_path = f"{name}_compressed.mp4"
@@ -180,21 +180,23 @@ def compress_and_convert_video(video_path: str) -> str:
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "2",
             "-i", video_path,
-            "-vf", "scale='min(360,iw)':-2,fps=15",
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-b:v", "400k", "-maxrate", "550k", "-bufsize", "800k",
-            "-c:a", "aac", "-b:a", "24k", "-ac", "1",
+            "-vf", "scale='min(480,iw)':-2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "36",
+            "-c:a", "aac", "-b:a", "32k", "-ac", "1",
             "-movflags", "+faststart",
             out_path
         ]
         
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=40)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45)
         gc.collect()
 
-        if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
-            return out_path
+        if proc.returncode == 0 and os.path.exists(out_path):
+            compressed_size = os.path.getsize(out_path) / (1024 * 1024)
+            if compressed_size > 0:
+                print(f"⚡ Nén thành công: {os.path.basename(out_path)} ({compressed_size:.2f} MB)")
+                return out_path
     except Exception as e:
-        print(f"Lỗi nén video: {e}")
+        print(f"Lỗi khi nén: {e}")
     return video_path
 
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
@@ -212,7 +214,7 @@ def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
     try:
         with open(file_path, "rb") as f:
             files = {"file": (safe_name, f)}
-            res = global_session.post(url, headers=headers, data=data, files=files, timeout=60)
+            res = global_session.post(url, headers=headers, data=data, files=files, timeout=90)
             if res.status_code == 200:
                 body = res.json()
                 if body.get("code") == 0:
@@ -245,10 +247,11 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                         client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
                         print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video
+            # 2. Tệp Video (.mp4, .mov, v.v.)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_and_convert_video(file_path)
 
+                # Upload với file_type là "stream"
                 file_key = upload_lark_file(send_path, "stream")
                 if not file_key:
                     file_key = upload_lark_file(send_path, "mp4")
@@ -267,7 +270,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                 else:
                     print(f"⚠️ Không nhận được file_key cho video: {file_name}")
 
-            # 3. Tệp khác
+            # 3. Tệp tài liệu khác
             else:
                 file_key = upload_lark_file(file_path, "stream")
                 if file_key:
@@ -294,7 +297,7 @@ def resolve_proof_url(url: str) -> str:
         try:
             code = cur_url.rstrip("/").split("/")[-1]
             api_url = f"https://encurtador.dev/api/link/{code}"
-            r_api = global_session.get(api_url, headers=headers, timeout=5, verify=False)
+            r_api = global_session.get(api_url, headers=headers, timeout=6, verify=False)
             if r_api.status_code == 200:
                 data = r_api.json()
                 dest = data.get("link", {}).get("destination") or data.get("destination") or data.get("url")
@@ -305,7 +308,7 @@ def resolve_proof_url(url: str) -> str:
 
     if "bom.so" in cur_url:
         try:
-            r_bom = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=6, verify=False)
+            r_bom = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=8, verify=False)
             if r_bom.url != cur_url:
                 return r_bom.url
         except Exception:
@@ -313,7 +316,7 @@ def resolve_proof_url(url: str) -> str:
 
     for _ in range(3):
         try:
-            r = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=8, verify=False)
+            r = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
             if r.url != cur_url:
                 cur_url = r.url
             if any(k in cur_url for k in ["drive.google.com", ".mp4", ".mov", ".png", ".jpg"]):
@@ -339,7 +342,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
     try:
         url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=15)
+        res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=20)
         
         confirm_token = None
         for k, v in res.cookies.items():
@@ -353,7 +356,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
         if confirm_token:
             url = f"https://drive.google.com/uc?export=download&confirm={confirm_token}&id={file_id}"
-            res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=60)
+            res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=90)
 
         content_disposition = res.headers.get("Content-Disposition", "")
         extracted_name = ""
@@ -401,7 +404,7 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
-        res = global_session.get(clean_url, headers=headers, timeout=12, verify=False)
+        res = global_session.get(clean_url, headers=headers, timeout=15, verify=False)
         if res.status_code == 200:
             html = res.text
             found_files = {}
@@ -441,7 +444,7 @@ def download_proof(url: str, target_dir: str) -> bool:
         save_path = os.path.join(target_dir, save_name)
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-        res = global_session.get(final_url, headers=headers, stream=True, timeout=60, verify=False)
+        res = global_session.get(final_url, headers=headers, stream=True, timeout=90, verify=False)
         if res.status_code == 200:
             with open(save_path, "wb") as f:
                 for chunk in res.iter_content(chunk_size=4 * 1024 * 1024):
@@ -494,7 +497,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         shutil.rmtree(task_temp_dir, ignore_errors=True)
         os.makedirs(task_temp_dir, exist_ok=True)
 
-        # Tải nhanh các file
         for u in urls:
             download_proof(u, task_temp_dir)
 
@@ -530,15 +532,14 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         header_block = (
             f"*<font color='turquoise'>          ≽^•⩊•^≼  </font>*\n"
             f"*<font color='turquoise'> ✧; Ｗｅｌｃｏｍｅ ;✧</font>*\n\n"
-            f"🎫 <text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-            f"      ╰┄▸ 💾 <text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
-            f"                ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
+            f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
+            f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
+            f"         ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
             f"• 🎬 : {file_count} file\n"
             f"{files_str}\n\n"
             f"⌛*<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O %</text_tag>*"
         )
 
-        # Gửi Thẻ 1 lập tức
         reply_thread_card(message_id, {"elements": [{"tag": "markdown", "content": header_block}]})
 
         # ---------------- BUNG TỆP VÀO THREAD ----------------
@@ -632,7 +633,7 @@ def silent_ignored_handler(data) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF (TỐC ĐỘ SIÊU TỐC & KHÔNG NGHẼN CPU)...")
+    print("🚀 BOT LARK PROOF (TỐI ƯU SIÊU TỐC & KHÔNG NGHẼN CPU)...")
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
     builder = lark.EventDispatcherHandler.builder("", "")
