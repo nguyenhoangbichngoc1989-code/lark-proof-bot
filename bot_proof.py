@@ -19,7 +19,6 @@ import urllib3
 from PIL import Image
 import pillow_heif
 
-# Nạp an toàn static_ffmpeg
 FFMPEG_EXEC = "ffmpeg"
 try:
     import static_ffmpeg
@@ -112,7 +111,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
+        return f"{size_bytes / (1024 * 1024):.2f} KB"
     return f"{size_bytes} B"
 
 def clean_file_display_name(filename: str) -> str:
@@ -168,36 +167,42 @@ def send_text_message(receive_id: str, text: str, receive_id_type: str = "open_i
     except Exception as e:
         print(f"Lỗi gửi tin nhắn: {e}")
 
-# ----------------- 4. NÉN VIDEO KHÔNG TREO THREAD -----------------
+# ----------------- 4. NÉN VIDEO NHANH VÀ CHẮC CHẮN DƯỚI 24MB -----------------
 def compress_and_convert_video(video_path: str) -> str:
-    """Nén video an toàn tối đa 60 giây, không chiếm dụng RAM Render"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         name, ext = os.path.splitext(video_path)
-        is_mov_or_other = ext.lower() in [".mov", ".mkv", ".avi", ".webm"]
+        is_other_format = ext.lower() in [".mov", ".mkv", ".avi", ".webm"]
 
-        if not is_mov_or_other and size_mb <= 24.0:
+        if not is_other_format and size_mb <= 24.0:
             return video_path
 
         compressed_path = f"{name}_cmp.mp4"
+
+        # Tùy chỉnh tham số nén theo dung lượng file
+        scale = "scale='min(480,iw)':-2,fps=18"
+        crf = "32"
+        if size_mb > 60:
+            scale = "scale='min(360,iw)':-2,fps=16"
+            crf = "36"
 
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "1",
             "-i", video_path,
-            "-vf", "scale='min(480,iw)':-2,fps=18",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35",
-            "-c:a", "aac", "-b:a", "32k", "-ac", "1",
+            "-vf", scale,
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", crf,
+            "-c:a", "aac", "-b:a", "24k", "-ac", "1",
             compressed_path
         ]
         
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
         gc.collect()
 
         if proc.returncode == 0 and os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
             return compressed_path
     except Exception as e:
-        print(f"Lưu ý nén video (dùng file gốc): {e}")
+        print(f"Lỗi nén video: {e}")
     return video_path
 
 def upload_file_direct(file_path: str, file_type: str = "stream") -> str:
@@ -335,7 +340,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
             url = f"https://drive.google.com/uc?export=download&confirm={confirm_token}&id={file_id}"
             res = global_session.get(url, headers=headers, stream=True, verify=False, timeout=120)
 
-        # Trích xuất tên tệp thực tế
         content_disposition = res.headers.get("Content-Disposition", "")
         extracted_name = ""
         if "filename=" in content_disposition:
@@ -467,18 +471,11 @@ def extract_message_text(message: dict) -> str:
 
     return ""
 
-# ----------------- 7. XỬ LÝ CHÍNH & PHẢN HỒI THẺ -----------------
-def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
+# ----------------- 7. XỬ LÝ CHÍNH & PHẢN HỒI THẺ CHO TỪNG TICKET -----------------
+def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: list, sender_id: str):
     try:
-        urls = re.findall(r'https?://[^\s<>"]+', text)
-        order_match = re.search(r"\b(\d{15,21})\b", text)
-        ticket_id = order_match.group(1) if order_match else "PROOF_DATA"
-
-        if not urls:
-            return
-
         req_count = get_current_request_count(ticket_id)
-        task_temp_dir = os.path.join(TEMP_DIR, message_id)
+        task_temp_dir = os.path.join(TEMP_DIR, f"{message_id}_{ticket_id}")
         shutil.rmtree(task_temp_dir, ignore_errors=True)
         os.makedirs(task_temp_dir, exist_ok=True)
 
@@ -499,7 +496,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
 
         if not final_files:
             reply_thread_card(message_id, {
-                "elements": [{"tag": "markdown", "content": "<text_tag color='carmine'>🚨 Không thể tải video từ link trên, vui lòng kiểm tra lại quyền truy cập!</text_tag>"}]
+                "elements": [{"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của đơn {ticket_id}, vui lòng kiểm tra lại quyền truy cập!</text_tag>"}]
             })
             shutil.rmtree(task_temp_dir, ignore_errors=True)
             return
@@ -528,7 +525,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
 
         reply_thread_card(message_id, {"elements": [{"tag": "markdown", "content": header_block}]})
 
-        # GỬI TỆP VÀO THREAD
+        # BUNG TỆP VÀO THREAD
         upload_and_send_batch_proofs(message_id, final_files)
 
         # THẺ 2: KẾT QUẢ LEVEL 3 HEADING & CĂN GIỮA TUYỆT ĐỐI
@@ -536,7 +533,6 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
         title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
-        # Tiêu đề Level 3 Heading chuẩn Markdown Lark
         heading_md = f" *♡* {sender_mention} ơi...\n\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
         thankyou_md = "<font color='turquoise'>┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
@@ -565,7 +561,37 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
         gc.collect()
 
     except Exception as e:
-        print(f"Lỗi toàn cục trong process_request: {e}")
+        print(f"Lỗi trong process_single_task: {e}")
+
+def parse_and_dispatch(message_id: str, chat_id: str, text: str, sender_id: str):
+    """Tự động phân tách từng cặp đơn và link nếu trong tin nhắn có nhiều mã đơn"""
+    # Tìm tất cả các cụm (mã đơn + link)
+    tokens = re.split(r'(\b\d{15,21}\b)', text)
+    
+    if len(tokens) >= 3:
+        current_id = None
+        current_text = ""
+        for part in tokens:
+            if re.match(r'^\d{15,21}$', part):
+                if current_id and current_text:
+                    urls = re.findall(r'https?://[^\s<>"]+', current_text)
+                    if urls:
+                        threading.Thread(target=process_single_task, args=(message_id, chat_id, current_id, urls, sender_id), daemon=True).start()
+                current_id = part
+                current_text = ""
+            else:
+                current_text += " " + part
+                
+        if current_id and current_text:
+            urls = re.findall(r'https?://[^\s<>"]+', current_text)
+            if urls:
+                threading.Thread(target=process_single_task, args=(message_id, chat_id, current_id, urls, sender_id), daemon=True).start()
+    else:
+        urls = re.findall(r'https?://[^\s<>"]+', text)
+        order_match = re.search(r"\b(\d{15,21})\b", text)
+        ticket_id = order_match.group(1) if order_match else "PROOF_DATA"
+        if urls:
+            threading.Thread(target=process_single_task, args=(message_id, chat_id, ticket_id, urls, sender_id), daemon=True).start()
 
 def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
     try:
@@ -581,8 +607,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         text = extract_message_text(msg_dict)
 
         if "http://" in text or "https://" in text:
-            # Chạy đa luồng độc lập, không chặn luồng chính
-            t = threading.Thread(target=process_request, args=(msg.message_id, chat_id, text, sender_id))
+            t = threading.Thread(target=parse_and_dispatch, args=(msg.message_id, chat_id, text, sender_id))
             t.daemon = True
             t.start()
     except Exception as e:
@@ -613,7 +638,7 @@ def silent_ignored_handler(data) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF (PHIÊN BẢN CHỐNG TREO LUỒNG & CHẠY ỔN ĐỊNH)...")
+    print("🚀 BOT LARK PROOF (PHIÊN BẢN CHUẨN ĐÃ TỐI ƯU TOÀN DIỆN 2026)...")
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
     builder = lark.EventDispatcherHandler.builder("", "")
