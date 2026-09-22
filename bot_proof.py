@@ -164,28 +164,42 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-def add_reaction_to_message(message_id: str, emoji_type: str = "KeepYourSpiritsAwake"):
-    """Chỉ thả reaction bé rắn khi toàn bộ media đã bung thành công vào thread"""
+# ----------------- CƠ CHẾ THẢ VÀ GỠ REACTION CHUẨN XÁC -----------------
+def add_reaction_to_message(message_id: str, emoji_type: str) -> str:
     token = get_tenant_access_token()
     if not token or not message_id:
-        return
+        return ""
 
     url = f"{TARGET_DOMAIN}/open-apis/im/v1/messages/{message_id}/reactions"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json; charset=utf-8"
     }
-    data = {
-        "reaction_type": {
-            "emoji_type": emoji_type
-        }
-    }
+    data = {"reaction_type": {"emoji_type": emoji_type}}
     try:
         res = global_session.post(url, headers=headers, json=data, timeout=10)
         if res.status_code == 200:
-            print(f"🐍 Đã hoàn tất 100%! Auto reaction [{emoji_type}] vào message_id: {message_id}")
+            body = res.json()
+            rx_id = body.get("data", {}).get("reaction_id", "")
+            print(f"✨ Auto reaction [{emoji_type}] thành công vào tin nhắn")
+            return rx_id
     except Exception as e:
         print(f"Lỗi gọi API reaction: {e}")
+    return ""
+
+def remove_reaction_from_message(message_id: str, reaction_id: str):
+    token = get_tenant_access_token()
+    if not token or not message_id or not reaction_id:
+        return
+
+    url = f"{TARGET_DOMAIN}/open-apis/im/v1/messages/{message_id}/reactions/{reaction_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        res = global_session.delete(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            print(f"⏰ Đã gỡ reaction đồng hồ")
+    except Exception as e:
+        print(f"Lỗi gỡ reaction: {e}")
 
 # ----------------- 4. NÉN SIÊU TỐC VÀ CHUYỂN ĐỔI VIDEO -----------------
 def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
@@ -193,7 +207,6 @@ def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         ext = os.path.splitext(video_path)[1].lower()
 
-        # Nếu file đã nhẹ dưới 25MB và là mp4 chuẩn thì không cần nén lại
         if ext == ".mp4" and size_mb <= 25.0:
             return video_path
 
@@ -317,12 +330,11 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK THÔNG MINH (SHAREPOINT, GDRIVE, ONEDRIVE) -----------------
+# ----------------- 5. GIẢI MÃ LINK THÔNG MINH -----------------
 def resolve_proof_url(url: str) -> str:
     if any(ext in url.lower() for ext in [".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm"]):
         return url
 
-    # Tự động xử lý link Stream Web App
     if "stream.aspx" in url and "id=" in url:
         m = re.search(r'id=([^&]+)', url)
         if m:
@@ -330,7 +342,6 @@ def resolve_proof_url(url: str) -> str:
             tenant_base = url.split("/personal/")[0]
             return f"{tenant_base}/personal/{file_server_path.split('/personal/')[1]}?download=1"
 
-    # Tự động gán download=1 cho link thư mục hoặc link tệp SharePoint / OneDrive
     if "sharepoint.com" in url or "1drv.ms" in url:
         sep = "&" if "?" in url else "?"
         if "download=1" not in url:
@@ -478,7 +489,6 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 def download_proof(url: str, target_dir: str) -> bool:
     final_url = resolve_proof_url(url)
     
-    # 1. Google Drive
     if "drive.google.com" in final_url:
         if "/folders/" in final_url:
             return download_gdrive_folder(final_url, target_dir)
@@ -487,7 +497,6 @@ def download_proof(url: str, target_dir: str) -> bool:
             if match:
                 return download_single_gdrive_file(match.group(1), target_dir)
 
-    # 2. Tải trực tiếp / SharePoint Folder (.zip) / SharePoint File
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -495,12 +504,10 @@ def download_proof(url: str, target_dir: str) -> bool:
         }
         res = global_session.get(final_url, headers=headers, stream=True, timeout=90, verify=False)
         
-        # Nếu SharePoint trả về HTML yêu cầu login hoặc trang web xem trước thì bỏ qua
         content_type = res.headers.get("Content-Type", "").lower()
         if "text/html" in content_type:
             return False
 
-        # Trích xuất tên tệp từ header Content-Disposition
         content_disposition = res.headers.get("Content-Disposition", "")
         extracted_name = ""
         if "filename=" in content_disposition:
@@ -521,7 +528,6 @@ def download_proof(url: str, target_dir: str) -> bool:
                     if chunk:
                         f.write(chunk)
             
-            # Nếu SharePoint trả về file .zip cả thư mục -> Tự động giải nén bung toàn bộ tệp
             if os.path.exists(save_path) and (save_name.endswith(".zip") or "zip" in content_type):
                 try:
                     with zipfile.ZipFile(save_path, 'r') as zip_ref:
@@ -572,6 +578,11 @@ def extract_message_text(message: dict) -> str:
 
 # ----------------- 7. XỬ LÝ CHÍNH & PHẢN HỒI THẺ CHO TỪNG TICKET -----------------
 def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: list, sender_id: str):
+    print(f"📥 BẮT ĐẦU XỬ LÝ ĐƠN: {ticket_id} (Tổng link: {len(urls)})")
+    
+    # ⏰ 1. THẢ NGAY REACTION ĐỒNG HỒ ĐỂ BÁO HIỆU BOT ĐANG CHẠY
+    clock_rx_id = add_reaction_to_message(message_id, "AlarmClock")
+
     try:
         req_count = get_current_request_count(ticket_id)
         task_temp_dir = os.path.join(TEMP_DIR, f"{message_id}_{ticket_id}")
@@ -579,6 +590,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         os.makedirs(task_temp_dir, exist_ok=True)
 
         for u in urls:
+            print(f"⏳ Đang tải link: {u}")
             download_proof(u, task_temp_dir)
 
         final_files = []
@@ -593,8 +605,11 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                         "ext": os.path.splitext(f)[1].lower()
                     })
 
-        # Nếu không thể tự động kéo file về
         if not final_files:
+            print(f"❌ Không tải được file nào cho đơn {ticket_id}")
+            if clock_rx_id:
+                remove_reaction_from_message(message_id, clock_rx_id)
+
             first_url = urls[0] if urls else ""
             if "sharepoint.com" in first_url or "1drv.ms" in first_url:
                 sharepoint_card = {
@@ -622,7 +637,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         total_size = sum(x["size"] for x in final_files)
         file_count = len(final_files)
 
-        # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU (9 KHOẢNG TRẮNG CĂN LỀ ╰┄‌•) ----------------
+        # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -641,7 +656,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         reply_thread_card(message_id, {"elements": [{"tag": "markdown", "content": header_block}]})
 
-        # ---------------- BUNG TỆP VÀO THREAD VÀ ĐẾM SỐ LƯỢNG THÀNH CÔNG THỰC TẾ ----------------
+        # ---------------- BUNG TỆP VÀO THREAD ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files)
 
         # ---------------- THẺ 2: KẾT QUẢ IN ĐẬM VÀ CĂN GIỮA TUYỆT ĐỐI ----------------
@@ -673,17 +688,22 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, finish_card_payload)
 
-        # ---------------- AUTO REACTION BÉ RẮN SAU KHI ĐÃ BUNG ĐẦY ĐỦ 100% VÀO THREAD ----------------
+        # ---------------- ĐỔI TỪ ĐỒNG HỒ SANG BÉ RẮN SAU KHI ĐÃ BUNG ĐẦY ĐỦ 100% ----------------
+        if clock_rx_id:
+            remove_reaction_from_message(message_id, clock_rx_id)
+
         if actual_bung_success > 0 and actual_bung_success >= len(final_files):
             add_reaction_to_message(message_id, "KeepYourSpiritsAwake")
         else:
-            print(f"⚠️ Chưa bung đủ media ({actual_bung_success}/{len(final_files)}) -> Không thả reaction!")
+            print(f"⚠️ Chưa bung đủ media ({actual_bung_success}/{len(final_files)}) -> Không thả reaction rắn!")
 
         shutil.rmtree(task_temp_dir, ignore_errors=True)
         gc.collect()
 
     except Exception as e:
         print(f"Lỗi trong process_single_task: {e}")
+        if clock_rx_id:
+            remove_reaction_from_message(message_id, clock_rx_id)
 
 def parse_and_dispatch(message_id: str, chat_id: str, text: str, sender_id: str):
     tokens = re.split(r'(\b\d{15,21}\b)', text)
@@ -727,14 +747,12 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         text = extract_message_text(msg_dict)
 
         if "http://" in text or "https://" in text:
+            print(f"📩 [LARK] ĐÃ BẮT ĐƯỢC LINK MỚI: {text[:80]}...")
             t = threading.Thread(target=parse_and_dispatch, args=(msg.message_id, chat_id, text, sender_id))
             t.daemon = True
             t.start()
     except Exception as e:
         print(f"Lỗi message: {e}")
-
-def silent_ignored_handler(data) -> None:
-    pass
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
@@ -746,8 +764,9 @@ def start_bot():
     
     event_handler = builder.build()
 
+    # Chặn ngầm log đỏ im.message.updated_v1
     if hasattr(event_handler, "_handlers"):
-        event_handler._handlers["im.message.updated_v1"] = silent_ignored_handler
+        event_handler._handlers["im.message.updated_v1"] = lambda d: None
 
     ws_client = lark.ws.Client(
         app_id=APP_ID,
