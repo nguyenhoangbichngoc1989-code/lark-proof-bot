@@ -3,6 +3,7 @@ import re
 import gc
 import json
 import shutil
+import zipfile
 import urllib.parse
 import subprocess
 import threading
@@ -189,9 +190,14 @@ def add_reaction_to_message(message_id: str, emoji_type: str = "KeepYourSpiritsA
 # ----------------- 4. NÉN SIÊU TỐC VÀ CHUYỂN ĐỔI VIDEO -----------------
 def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
     try:
-        dir_name = os.path.dirname(video_path)
+        size_mb = os.path.getsize(video_path) / (1024 * 1024)
         ext = os.path.splitext(video_path)[1].lower()
 
+        # Nếu file đã nhẹ dưới 25MB và là mp4 chuẩn thì không cần nén lại
+        if ext == ".mp4" and size_mb <= 25.0:
+            return video_path
+
+        dir_name = os.path.dirname(video_path)
         safe_in = os.path.join(dir_name, "temp_render_in" + ext)
         if not os.path.exists(safe_in):
             shutil.copy2(video_path, safe_in)
@@ -311,17 +317,24 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK (HỖ TRỢ GDRIVE, SHAREPOINT, ONEDRIVE) -----------------
+# ----------------- 5. GIẢI MÃ LINK THÔNG MINH (SHAREPOINT, GDRIVE, ONEDRIVE) -----------------
 def resolve_proof_url(url: str) -> str:
     if any(ext in url.lower() for ext in [".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm"]):
         return url
 
-    # Tự động chuyển link tệp SharePoint / OneDrive sang link tải trực tiếp
+    # Tự động xử lý link Stream Web App
+    if "stream.aspx" in url and "id=" in url:
+        m = re.search(r'id=([^&]+)', url)
+        if m:
+            file_server_path = urllib.parse.unquote(m.group(1))
+            tenant_base = url.split("/personal/")[0]
+            return f"{tenant_base}/personal/{file_server_path.split('/personal/')[1]}?download=1"
+
+    # Tự động gán download=1 cho link thư mục hoặc link tệp SharePoint / OneDrive
     if "sharepoint.com" in url or "1drv.ms" in url:
-        if ":f:/" not in url:
-            sep = "&" if "?" in url else "?"
-            if "download=1" not in url:
-                return f"{url}{sep}download=1"
+        sep = "&" if "?" in url else "?"
+        if "download=1" not in url:
+            return f"{url}{sep}download=1"
         return url
 
     headers = {
@@ -474,18 +487,31 @@ def download_proof(url: str, target_dir: str) -> bool:
             if match:
                 return download_single_gdrive_file(match.group(1), target_dir)
 
-    # 2. Tải trực tiếp (Bao gồm file đơn lẻ SharePoint có ?download=1)
+    # 2. Tải trực tiếp / SharePoint Folder (.zip) / SharePoint File
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "*/*"
+        }
         res = global_session.get(final_url, headers=headers, stream=True, timeout=90, verify=False)
         
-        # Nếu link trả về HTML thì không phải file tải trực tiếp
-        if "text/html" in res.headers.get("Content-Type", ""):
+        # Nếu SharePoint trả về HTML yêu cầu login hoặc trang web xem trước thì bỏ qua
+        content_type = res.headers.get("Content-Type", "").lower()
+        if "text/html" in content_type:
             return False
 
-        parsed_url = urllib.parse.urlparse(final_url)
-        path_name = os.path.basename(parsed_url.path)
-        raw_name = path_name if (path_name and "." in path_name) else f"video_{len(os.listdir(target_dir)) + 1}.mp4"
+        # Trích xuất tên tệp từ header Content-Disposition
+        content_disposition = res.headers.get("Content-Disposition", "")
+        extracted_name = ""
+        if "filename=" in content_disposition:
+            fn_match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)["\']?', content_disposition)
+            if fn_match:
+                try:
+                    extracted_name = urllib.parse.unquote(fn_match.group(1))
+                except Exception:
+                    extracted_name = fn_match.group(1)
+
+        raw_name = extracted_name or os.path.basename(urllib.parse.urlparse(final_url).path) or "downloaded_file.mp4"
         save_name = sanitize_filename(raw_name)
         save_path = os.path.join(target_dir, save_name)
 
@@ -494,6 +520,17 @@ def download_proof(url: str, target_dir: str) -> bool:
                 for chunk in res.iter_content(chunk_size=4 * 1024 * 1024):
                     if chunk:
                         f.write(chunk)
+            
+            # Nếu SharePoint trả về file .zip cả thư mục -> Tự động giải nén bung toàn bộ tệp
+            if os.path.exists(save_path) and (save_name.endswith(".zip") or "zip" in content_type):
+                try:
+                    with zipfile.ZipFile(save_path, 'r') as zip_ref:
+                        zip_ref.extractall(target_dir)
+                    os.remove(save_path)
+                    return True
+                except Exception as e:
+                    print(f"Lỗi giải nén ZIP: {e}")
+
             if os.path.exists(save_path) and os.path.getsize(save_path) > 1000:
                 return True
     except Exception as e:
@@ -556,10 +593,9 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                         "ext": os.path.splitext(f)[1].lower()
                     })
 
-        # Nếu không tải được tệp nào về máy
+        # Nếu không thể tự động kéo file về
         if not final_files:
             first_url = urls[0] if urls else ""
-            # Kiểm tra nếu là thư mục SharePoint / OneDrive thì gửi thẻ hướng dẫn xem trực tiếp
             if "sharepoint.com" in first_url or "1drv.ms" in first_url:
                 sharepoint_card = {
                     "elements": [
@@ -569,7 +605,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                                 f"📁 **ĐƠN HÀNG: {ticket_id}**\n\n"
                                 f"<font color='orange'>⚠️ Link được chia sẻ là **Thư mục SharePoint nội bộ**, bot không thể tải tự động do cơ chế bảo mật của Microsoft.</font>\n\n"
                                 f"👉 [**Bấm vào đây để mở trực tiếp Thư mục SharePoint**]({first_url})\n\n"
-                                f"<font color='grey'>💡 *Mẹo: Nếu muốn bot bung video trực tiếp vào thread, hãy bấm vào file video trong thư mục và Copy liên kết của riêng file đó nhé!*</font>"
+                                f"<font color='grey'>💡 *Mẹo: Hãy bấm vào dấu 3 chấm cạnh video và chọn 'Sao chép liên kết' (Copy link) của riêng video đó rồi gửi lại cho bot nhé!*</font>"
                             )
                         }
                     ]
