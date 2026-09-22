@@ -537,7 +537,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
         # Tiêu đề Level 3 Heading chuẩn Markdown Lark
-        heading_md = f"### ♡ {sender_mention} ơi...\n\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
+        heading_md = f" *♡* {sender_mention} ơi...\n\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
         thankyou_md = "<font color='turquoise'>┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         finish_card_payload = {
