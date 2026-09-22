@@ -127,7 +127,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def sanitize_filename(filename: str) -> str:
@@ -163,9 +163,8 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- TỰ ĐỘNG THẢ REACTION VÀO TIN NHẮN GỐC -----------------
 def add_reaction_to_message(message_id: str, emoji_type: str = "KeepYourSpiritsAwake"):
-    """Chỉ thả reaction bé rắn vào tin nhắn gốc khi toàn bộ media đã bung thành công vào thread"""
+    """Chỉ thả reaction bé rắn khi toàn bộ media đã bung thành công vào thread"""
     token = get_tenant_access_token()
     if not token or not message_id:
         return
@@ -184,16 +183,12 @@ def add_reaction_to_message(message_id: str, emoji_type: str = "KeepYourSpiritsA
         res = global_session.post(url, headers=headers, json=data, timeout=10)
         if res.status_code == 200:
             print(f"🐍 Đã hoàn tất 100%! Auto reaction [{emoji_type}] vào message_id: {message_id}")
-        else:
-            print(f"Lỗi thả reaction: {res.status_code} - {res.text}")
     except Exception as e:
         print(f"Lỗi gọi API reaction: {e}")
 
 # ----------------- 4. NÉN SIÊU TỐC VÀ CHUYỂN ĐỔI VIDEO -----------------
 def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
-    """Nén video về dưới 10MB cực nhanh và giữ tên file gốc sạch đẹp"""
     try:
-        size_mb = os.path.getsize(video_path) / (1024 * 1024)
         dir_name = os.path.dirname(video_path)
         ext = os.path.splitext(video_path)[1].lower()
 
@@ -252,16 +247,11 @@ def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
                 body = res.json()
                 if body.get("code") == 0:
                     return body["data"]["file_key"]
-                else:
-                    print(f"❌ Lark API từ chối ({file_type}): {body}")
-            else:
-                print(f"❌ HTTP lỗi: {res.status_code} - {res.text}")
     except Exception as e:
         print(f"Lỗi upload: {e}")
     return ""
 
 def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
-    """Chỉ đếm các tệp thực sự bung thành công (ảnh/video/file) vào thread"""
     actual_sent_count = 0
 
     for f in final_files:
@@ -270,7 +260,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
         file_name = f["name"]
 
         try:
-            # 1. Hình ảnh bung trực tiếp
+            # 1. Hình ảnh
             if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
                 with open(file_path, "rb") as img_f:
                     create_req = CreateImageRequest.builder() \
@@ -283,9 +273,9 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
                         resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
                         if resp and resp.success():
                             actual_sent_count += 1
-                            print(f"✅ Đã gửi ảnh thành công: {file_name}")
+                            print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video bung trực tiếp
+            # 2. Tệp Video
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_and_convert_video(file_path, original_name=file_name)
                 size_mb = os.path.getsize(send_path) / (1024 * 1024)
@@ -303,9 +293,9 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
                     resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     if resp and resp.success():
                         actual_sent_count += 1
-                        print(f"📥 Đã bung video thành công: {os.path.basename(send_path)}")
+                        print(f"📥 Đã bung video: {os.path.basename(send_path)}")
 
-            # 3. Tệp khác bung trực tiếp
+            # 3. Tệp khác
             else:
                 if os.path.getsize(file_path) / (1024 * 1024) <= 28.0:
                     file_key = upload_lark_file(file_path, "stream")
@@ -314,18 +304,24 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
                         resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                         if resp and resp.success():
                             actual_sent_count += 1
-                            print(f"📎 Đã bung tệp thành công: {file_name}")
-
         except Exception as e:
-            print(f"Lỗi gửi media {file_name}: {e}")
+            print(f"Lỗi gửi media: {e}")
 
         gc.collect()
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK VÀ TẢI TỆP TỐC ĐỘ CAO -----------------
+# ----------------- 5. GIẢI MÃ LINK (HỖ TRỢ GDRIVE, SHAREPOINT, ONEDRIVE) -----------------
 def resolve_proof_url(url: str) -> str:
     if any(ext in url.lower() for ext in [".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm"]):
+        return url
+
+    # Tự động chuyển link tệp SharePoint / OneDrive sang link tải trực tiếp
+    if "sharepoint.com" in url or "1drv.ms" in url:
+        if ":f:/" not in url:
+            sep = "&" if "?" in url else "?"
+            if "download=1" not in url:
+                return f"{url}{sep}download=1"
         return url
 
     headers = {
@@ -360,18 +356,13 @@ def resolve_proof_url(url: str) -> str:
             r = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
             if r.url != cur_url:
                 cur_url = r.url
-            if any(k in cur_url for k in ["drive.google.com", ".mp4", ".mov", ".png", ".jpg"]):
+            if any(k in cur_url for k in ["drive.google.com", "sharepoint.com", ".mp4", ".mov", ".png", ".jpg"]):
                 return cur_url
 
             meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', r.text, re.IGNORECASE)
             if meta_match:
                 cur_url = urllib.parse.urljoin(cur_url, meta_match.group(1).replace("&amp;", "&"))
                 continue
-
-            dest_match = re.search(r'["\'](https?://(?:drive\.google\.com|[^"\']*?\.(?:mp4|mov|jpg|png))[^"\']*)["\']', r.text)
-            if dest_match:
-                cur_url = dest_match.group(1).replace("&amp;", "&")
-                break
             break
         except Exception:
             break
@@ -474,6 +465,7 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 def download_proof(url: str, target_dir: str) -> bool:
     final_url = resolve_proof_url(url)
     
+    # 1. Google Drive
     if "drive.google.com" in final_url:
         if "/folders/" in final_url:
             return download_gdrive_folder(final_url, target_dir)
@@ -482,15 +474,21 @@ def download_proof(url: str, target_dir: str) -> bool:
             if match:
                 return download_single_gdrive_file(match.group(1), target_dir)
 
+    # 2. Tải trực tiếp (Bao gồm file đơn lẻ SharePoint có ?download=1)
     try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        res = global_session.get(final_url, headers=headers, stream=True, timeout=90, verify=False)
+        
+        # Nếu link trả về HTML thì không phải file tải trực tiếp
+        if "text/html" in res.headers.get("Content-Type", ""):
+            return False
+
         parsed_url = urllib.parse.urlparse(final_url)
         path_name = os.path.basename(parsed_url.path)
         raw_name = path_name if (path_name and "." in path_name) else f"video_{len(os.listdir(target_dir)) + 1}.mp4"
         save_name = sanitize_filename(raw_name)
         save_path = os.path.join(target_dir, save_name)
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-        res = global_session.get(final_url, headers=headers, stream=True, timeout=90, verify=False)
         if res.status_code == 200:
             with open(save_path, "wb") as f:
                 for chunk in res.iter_content(chunk_size=4 * 1024 * 1024):
@@ -558,10 +556,29 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                         "ext": os.path.splitext(f)[1].lower()
                     })
 
+        # Nếu không tải được tệp nào về máy
         if not final_files:
-            reply_thread_card(message_id, {
-                "elements": [{"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của đơn {ticket_id}, vui lòng kiểm tra lại quyền truy cập!</text_tag>"}]
-            })
+            first_url = urls[0] if urls else ""
+            # Kiểm tra nếu là thư mục SharePoint / OneDrive thì gửi thẻ hướng dẫn xem trực tiếp
+            if "sharepoint.com" in first_url or "1drv.ms" in first_url:
+                sharepoint_card = {
+                    "elements": [
+                        {
+                            "tag": "markdown",
+                            "content": (
+                                f"📁 **ĐƠN HÀNG: {ticket_id}**\n\n"
+                                f"<font color='orange'>⚠️ Link được chia sẻ là **Thư mục SharePoint nội bộ**, bot không thể tải tự động do cơ chế bảo mật của Microsoft.</font>\n\n"
+                                f"👉 [**Bấm vào đây để mở trực tiếp Thư mục SharePoint**]({first_url})\n\n"
+                                f"<font color='grey'>💡 *Mẹo: Nếu muốn bot bung video trực tiếp vào thread, hãy bấm vào file video trong thư mục và Copy liên kết của riêng file đó nhé!*</font>"
+                            )
+                        }
+                    ]
+                }
+                reply_thread_card(message_id, sharepoint_card)
+            else:
+                reply_thread_card(message_id, {
+                    "elements": [{"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của đơn {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"}]
+                })
             shutil.rmtree(task_temp_dir, ignore_errors=True)
             return
 
