@@ -167,23 +167,22 @@ def send_text_message(receive_id: str, text: str, receive_id_type: str = "open_i
     except Exception as e:
         print(f"Lỗi gửi tin nhắn: {e}")
 
-# ----------------- 4. NÉN VIDEO NHANH VÀ CHẮC CHẮN DƯỚI 24MB -----------------
+# ----------------- 4. NÉN & CHUYỂN MÃ VIDEO -----------------
 def compress_and_convert_video(video_path: str) -> str:
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         name, ext = os.path.splitext(video_path)
-        is_other_format = ext.lower() in [".mov", ".mkv", ".avi", ".webm"]
+        is_mov_or_other = ext.lower() in [".mov", ".mkv", ".avi", ".webm"]
 
-        if not is_other_format and size_mb <= 24.0:
+        if not is_mov_or_other and size_mb <= 24.0:
             return video_path
 
-        compressed_path = f"{name}_cmp.mp4"
+        compressed_path = f"{name}_compressed.mp4"
 
-        # Tùy chỉnh tham số nén theo dung lượng file
         scale = "scale='min(480,iw)':-2,fps=18"
         crf = "32"
         if size_mb > 60:
-            scale = "scale='min(360,iw)':-2,fps=16"
+            scale = "scale='min(360,iw)':-2,fps=15"
             crf = "36"
 
         cmd = [
@@ -202,7 +201,7 @@ def compress_and_convert_video(video_path: str) -> str:
         if proc.returncode == 0 and os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
             return compressed_path
     except Exception as e:
-        print(f"Lỗi nén video: {e}")
+        print(f"Lưu ý nén/chuyển mã video: {e}")
     return video_path
 
 def upload_file_direct(file_path: str, file_type: str = "stream") -> str:
@@ -505,7 +504,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         total_size = sum(x["size"] for x in final_files)
         file_count = len(final_files)
 
-        # THẺ 1: BÁO CÁO BAN ĐẦU
+        # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"<font color='carmine'>╰┄‌• </font> {item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -525,16 +524,17 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         reply_thread_card(message_id, {"elements": [{"tag": "markdown", "content": header_block}]})
 
-        # BUNG TỆP VÀO THREAD
+        # ---------------- BUNG TỆP VÀO THREAD ----------------
         upload_and_send_batch_proofs(message_id, final_files)
 
-        # THẺ 2: KẾT QUẢ LEVEL 3 HEADING & CĂN GIỮA TUYỆT ĐỐI
+        # ---------------- THẺ 2: KẾT QUẢ ĐÃ BỎ ### VÀ CĂN GIỮA TUYỆT ĐỐI ----------------
         rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
         title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
-        heading_md = f" *♡* {sender_mention} ơi...\n\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
-        thankyou_md = "<font color='turquoise'>┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+        # Đã bỏ ### theo yêu cầu của chị
+        heading_md = f"**♡ {sender_mention} ơi...**\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
+        thankyou_md = "<font color='turquoise'>       ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         finish_card_payload = {
             "elements": [
@@ -564,8 +564,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         print(f"Lỗi trong process_single_task: {e}")
 
 def parse_and_dispatch(message_id: str, chat_id: str, text: str, sender_id: str):
-    """Tự động phân tách từng cặp đơn và link nếu trong tin nhắn có nhiều mã đơn"""
-    # Tìm tất cả các cụm (mã đơn + link)
     tokens = re.split(r'(\b\d{15,21}\b)', text)
     
     if len(tokens) >= 3:
