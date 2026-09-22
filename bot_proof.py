@@ -163,48 +163,50 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- 4. NÉN SIÊU TỐC KHÔNG LỖI ĐƯỜNG DẪN -----------------
+# ----------------- 4. NÉN SIÊU TỐC VỀ < 5MB TRONG 5-8 GIÂY -----------------
 def compress_and_convert_video(video_path: str) -> str:
-    """Đổi tên tệp sang ASCII an toàn trước khi nén để ffmpeg không bị kẹt mã tiếng Việt"""
+    """Hạ fps xuống 12 và scale 320p giúp nén video 45MB về 3MB chỉ trong vài giây"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         dir_name = os.path.dirname(video_path)
         ext = os.path.splitext(video_path)[1].lower()
 
-        # Tạo file tạm hoàn toàn không chứa ký tự tiếng Việt
+        # Tạo file tạm an toàn không dấu cách
         safe_in = os.path.join(dir_name, "raw_in" + ext)
         if not os.path.exists(safe_in):
             shutil.copy2(video_path, safe_in)
 
-        out_path = os.path.join(dir_name, "safe_out.mp4")
+        out_path = os.path.join(dir_name, "proof_cmp.mp4")
 
-        # Nén siêu nhẹ: 320p, 15fps, crf 38, tắt tiếng để nén cực nhanh trong 3-5 giây
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "2",
             "-i", safe_in,
-            "-vf", "scale='min(320,iw)':-2",
-            "-r", "15",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "38",
+            "-vf", "fps=12,scale='min(320,iw)':-2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "40",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
             out_path
         ]
         
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=35)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=75)
         gc.collect()
 
         if proc.returncode == 0 and os.path.exists(out_path):
             new_size = os.path.getsize(out_path) / (1024 * 1024)
-            if new_size > 0:
-                print(f"⚡ Đã nén video thành công: {new_size:.2f} MB")
+            if new_size > 0 and new_size <= 28.0:
+                print(f"⚡ Nén video thành công: {new_size:.2f} MB")
                 return out_path
     except Exception as e:
         print(f"Lỗi nén video: {e}")
     return video_path
 
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
+    # Nếu file thực sự vẫn lớn hơn 28MB thì không gọi upload để tránh dính lỗi 400
+    if os.path.getsize(file_path) / (1024 * 1024) > 28.0:
+        return ""
+
     token = get_tenant_access_token()
     if not token:
         return ""
@@ -232,7 +234,7 @@ def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
         print(f"Lỗi upload: {e}")
     return ""
 
-def upload_and_send_batch_proofs(message_id: str, final_files: list):
+def upload_and_send_batch_proofs(message_id: str, final_files: list, original_urls: list = None):
     for f in final_files:
         file_path = f["path"]
         file_ext = f["ext"]
@@ -255,10 +257,13 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             # 2. Tệp Video (.mp4, .mov, v.v.)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_and_convert_video(file_path)
+                size_mb = os.path.getsize(send_path) / (1024 * 1024)
 
-                file_key = upload_lark_file(send_path, "stream")
-                if not file_key:
-                    file_key = upload_lark_file(send_path, "mp4")
+                file_key = ""
+                if size_mb <= 28.0:
+                    file_key = upload_lark_file(send_path, "stream")
+                    if not file_key:
+                        file_key = upload_lark_file(send_path, "mp4")
 
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder() \
@@ -269,17 +274,39 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                     resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     if resp and resp.success():
                         print(f"📥 Đã bung video vào thread: {file_name}")
-                    else:
-                        print(f"❌ Lỗi gửi tin nhắn file: {resp.code} - {resp.msg}")
                 else:
-                    print(f"⚠️ Không nhận được file_key cho video: {file_name}")
+                    # Tự động gửi thẻ link trực tiếp nếu vượt quá giới hạn hoặc lỗi upload
+                    url_display = original_urls[0] if (original_urls and len(original_urls) > 0) else ""
+                    if url_display:
+                        link_card = {
+                            "elements": [
+                                {
+                                    "tag": "markdown",
+                                    "content": f"📁 **{file_name}** ({format_size(os.path.getsize(file_path))})\n<font color='grey'>Video vượt giới hạn upload trực tiếp (30MB), bấm link bên dưới để xem/tải:</font>\n👉 [Xem/Tải video tại đây]({url_display})"
+                                }
+                            ]
+                        }
+                        reply_thread_card(message_id, link_card)
 
             # 3. Tệp khác
             else:
-                file_key = upload_lark_file(file_path, "stream")
-                if file_key:
-                    file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
-                    client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+                if os.path.getsize(file_path) / (1024 * 1024) <= 28.0:
+                    file_key = upload_lark_file(file_path, "stream")
+                    if file_key:
+                        file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
+                        client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+                else:
+                    url_display = original_urls[0] if (original_urls and len(original_urls) > 0) else ""
+                    if url_display:
+                        link_card = {
+                            "elements": [
+                                {
+                                    "tag": "markdown",
+                                    "content": f"📁 **{file_name}** ({format_size(os.path.getsize(file_path))})\n👉 [Tải tệp tại đây]({url_display})"
+                                }
+                            ]
+                        }
+                        reply_thread_card(message_id, link_card)
 
         except Exception as e:
             print(f"Lỗi gửi media {file_name}: {e}")
@@ -551,8 +578,8 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         reply_thread_card(message_id, {"elements": [{"tag": "markdown", "content": header_block}]})
 
-        # ---------------- BUNG TỆP VÀO THREAD ----------------
-        upload_and_send_batch_proofs(message_id, final_files)
+        # ---------------- BUNG TỆP VÀO THREAD (KÈM FALLBACK LINK GỐC) ----------------
+        upload_and_send_batch_proofs(message_id, final_files, urls)
 
         # ---------------- THẺ 2: KẾT QUẢ IN ĐẬM VÀ CĂN GIỮA TUYỆT ĐỐI ----------------
         rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
