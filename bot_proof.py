@@ -25,8 +25,8 @@ try:
     import static_ffmpeg
     static_ffmpeg.add_paths()
     FFMPEG_EXEC = shutil.which("ffmpeg") or "ffmpeg"
-except Exception:
-    pass
+except Exception as e:
+    print(f"Lưu ý static_ffmpeg: {e}")
 
 if not shutil.which(FFMPEG_EXEC):
     FFMPEG_EXEC = "ffmpeg"
@@ -162,54 +162,42 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-def send_text_message(receive_id: str, text: str, receive_id_type: str = "open_id"):
-    try:
-        req = CreateMessageRequest.builder() \
-            .receive_id_type(receive_id_type) \
-            .request_body(CreateMessageRequestBody.builder()
-                          .receive_id(receive_id)
-                          .msg_type("text")
-                          .content(json.dumps({"text": text}))
-                          .build()) \
-            .build()
-        client.im.v1.message.create(req)
-    except Exception as e:
-        print(f"Lỗi gửi tin nhắn: {e}")
-
-# ----------------- 4. NÉN SIÊU TỐC KHÔNG NGHẼN CPU (DƯỚI 20MB) -----------------
+# ----------------- 4. NÉN ÉP DUNG LƯỢNG < 20MB NHANH CHÓNG -----------------
 def compress_and_convert_video(video_path: str) -> str:
-    """Nén video thần tốc với CRF cao và scale nhẹ, chạy xong trong 10-15s"""
+    """Nén bắt buộc về dưới 20MB bằng bitrate cố định cực nhẹ và nhanh"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         name, ext = os.path.splitext(video_path)
         is_mov_or_other = ext.lower() in [".mov", ".mkv", ".avi", ".webm"]
 
-        # Nếu file đã dưới 20MB và là mp4 thì bỏ qua khâu nén
+        # Nếu file đã dưới 20MB và là mp4 chuẩn thì giữ nguyên
         if not is_mov_or_other and size_mb <= 20.0:
             return video_path
 
         out_path = f"{name}_compressed.mp4"
 
-        # Thiết lập thông số nén cực nhanh, không chiếm RAM
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "2",
             "-i", video_path,
             "-vf", "scale='min(360,iw)':-2,fps=15",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "36",
-            "-b:v", "500k",
+            "-c:v", "libx264", "-preset", "ultrafast",
+            "-b:v", "450k", "-maxrate", "600k", "-bufsize", "1000k",
             "-c:a", "aac", "-b:a", "24k", "-ac", "1",
             "-movflags", "+faststart",
             out_path
         ]
         
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=75)
         gc.collect()
 
-        if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
-            return out_path
+        if proc.returncode == 0 and os.path.exists(out_path):
+            new_size_mb = os.path.getsize(out_path) / (1024 * 1024)
+            if new_size_mb <= 24.0:
+                print(f"⚡ Đã nén video thành công: {os.path.basename(out_path)} ({new_size_mb:.2f} MB)")
+                return out_path
     except Exception as e:
-        print(f"Lưu ý nén video: {e}")
+        print(f"Lỗi nén video: {e}")
     return video_path
 
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
@@ -232,8 +220,12 @@ def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
                 body = res.json()
                 if body.get("code") == 0:
                     return body["data"]["file_key"]
+                else:
+                    print(f"❌ Lark API từ chối ({file_type}): {body}")
+            else:
+                print(f"❌ HTTP lỗi: {res.status_code} - {res.text}")
     except Exception as e:
-        print(f"Lỗi upload trực tiếp: {e}")
+        print(f"Lỗi upload: {e}")
     return ""
 
 def upload_and_send_batch_proofs(message_id: str, final_files: list):
@@ -243,6 +235,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
         file_name = f["name"]
 
         try:
+            # 1. Hình ảnh
             if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
                 with open(file_path, "rb") as img_f:
                     create_req = CreateImageRequest.builder() \
@@ -253,9 +246,12 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                         img_k = create_resp.data.image_key
                         body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
                         client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
+                        print(f"✅ Đã gửi ảnh: {file_name}")
 
+            # 2. Tệp Video
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_and_convert_video(file_path)
+
                 file_key = upload_lark_file(send_path, "stream")
                 if not file_key:
                     file_key = upload_lark_file(send_path, "mp4")
@@ -266,7 +262,15 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                         .msg_type("file") \
                         .reply_in_thread(True) \
                         .build()
-                    client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+                    resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+                    if resp and resp.success():
+                        print(f"📥 Đã bung video vào thread: {file_name}")
+                    else:
+                        print(f"❌ Lỗi gửi tin nhắn file: {resp.code} - {resp.msg}")
+                else:
+                    print(f"⚠️ Không nhận được file_key cho video: {file_name}")
+
+            # 3. Tệp tài liệu khác
             else:
                 file_key = upload_lark_file(file_path, "stream")
                 if file_key:
@@ -528,12 +532,12 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         header_block = (
             f"*<font color='turquoise'>          ≽^•⩊•^≼  </font>*\n"
             f"*<font color='turquoise'> ✧; Ｗｅｌｃｏｍｅ ;✧</font>*\n\n"
-            f"🎫 <text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-            f"   ╰┄▸ 💾 <text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
+            f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
+            f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
             f"         ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
             f"• 🎬 : {file_count} file\n"
             f"{files_str}\n\n"
-            f"⌛**<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O %</text_tag>**"
+            f"⌛*<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O %</text_tag>*"
         )
 
         reply_thread_card(message_id, {"elements": [{"tag": "markdown", "content": header_block}]})
@@ -546,7 +550,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
-        heading_md = f" **<font color='carmine'>♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
+        heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         finish_card_payload = {
@@ -624,37 +628,16 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
     except Exception as e:
         print(f"Lỗi message: {e}")
 
-def handle_menu_click(data: dict) -> None:
-    try:
-        event = data.get("event", {})
-        event_key = event.get("event_key", "")
-        operator = event.get("operator", {})
-        open_id = operator.get("operator_id", {}).get("open_id", "") or operator.get("open_id", "")
-
-        if event_key == "trigger_proof_template":
-            template = (
-                "📋 TEMPLATES CHECK PROOF\n\n"
-                "Hãy copy đoạn bên dưới, dán vào ô chat rồi thêm Ticket_ID & link proof nhé:\n\n"
-                "Take proof & hold after confirmation\n"
-                "7686040088400168978\n"
-                "https://bom.so/sf8t5L"
-            )
-            if open_id:
-                send_text_message(open_id, template, receive_id_type="open_id")
-    except Exception as e:
-        print(f"Lỗi menu click: {e}")
-
 def silent_ignored_handler(data) -> None:
     pass
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF (TỐC ĐỘ SIÊU TỐC & KHÔNG NGHẼN CPU)...")
+    print("🚀 BOT LARK PROOF (TỐI ƯU SIÊU TỐC & KHÔNG NGHẼN CPU)...")
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
-    builder.register_p2_application_bot_menu_v6(lambda d: handle_menu_click(json.loads(lark.JSON.marshal(d))))
     
     event_handler = builder.build()
 
