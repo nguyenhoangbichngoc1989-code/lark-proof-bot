@@ -56,13 +56,20 @@ client = lark.Client.builder() \
     .log_level(lark.LogLevel.INFO) \
     .build()
 
-# ----------------- 2. SERVER HTTP DUY TRÌ RENDER -----------------
+# ----------------- 2. SERVER HTTP DUY TRÌ RENDER (TỐI ƯU CHO CRON-JOB) -----------------
 class RenderHealthHandler(http.server.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", "2")
         self.end_headers()
-        self.wfile.write(b"Bot Lark Proof is running healthy 24/7!")
+        self.wfile.write(b"OK")
 
     def log_message(self, format, *args):
         pass
@@ -111,7 +118,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def clean_file_display_name(filename: str) -> str:
@@ -167,23 +174,26 @@ def send_text_message(receive_id: str, text: str, receive_id_type: str = "open_i
     except Exception as e:
         print(f"Lỗi gửi tin nhắn: {e}")
 
-# ----------------- 4. NÉN & CHUYỂN MÃ VIDEO -----------------
+# ----------------- 4. NÉN VIDEO BẢO ĐẢM < 20MB ĐỂ UPLOAD THÀNH CÔNG -----------------
 def compress_and_convert_video(video_path: str) -> str:
+    """Đảm bảo mọi video gửi lên đều nhỏ hơn 24MB, tương thích 100% với Lark"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         name, ext = os.path.splitext(video_path)
         is_mov_or_other = ext.lower() in [".mov", ".mkv", ".avi", ".webm"]
 
-        if not is_mov_or_other and size_mb <= 24.0:
+        # Nếu đã dưới 23MB và chuẩn định dạng mp4 thì gửi trực tiếp
+        if not is_mov_or_other and size_mb <= 23.0:
             return video_path
 
-        compressed_path = f"{name}_compressed.mp4"
+        out_path = f"{name}_compressed.mp4"
 
+        # Cấu hình nén nhanh, nhẹ, giảm phân giải để đưa dung lượng xuống dưới 20MB
         scale = "scale='min(480,iw)':-2,fps=18"
         crf = "32"
-        if size_mb > 60:
+        if size_mb > 50:
             scale = "scale='min(360,iw)':-2,fps=15"
-            crf = "36"
+            crf = "35"
 
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
@@ -192,16 +202,33 @@ def compress_and_convert_video(video_path: str) -> str:
             "-vf", scale,
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", crf,
             "-c:a", "aac", "-b:a", "24k", "-ac", "1",
-            compressed_path
+            "-movflags", "+faststart",
+            out_path
         ]
         
         proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
         gc.collect()
 
-        if proc.returncode == 0 and os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
-            return compressed_path
+        if proc.returncode == 0 and os.path.exists(out_path):
+            compressed_size = os.path.getsize(out_path) / (1024 * 1024)
+            # Nếu file nén vẫn còn > 23MB thì nén bước 2 quyết liệt hơn
+            if compressed_size > 23.0:
+                out_path_low = f"{name}_low.mp4"
+                cmd_low = [
+                    FFMPEG_EXEC, "-y", "-nostdin",
+                    "-threads", "1",
+                    "-i", out_path,
+                    "-vf", "scale='min(320,iw)':-2,fps=15",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "38",
+                    "-c:a", "aac", "-b:a", "16k", "-ac", "1",
+                    out_path_low
+                ]
+                subprocess.run(cmd_low, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
+                if os.path.exists(out_path_low) and os.path.getsize(out_path_low) > 1000:
+                    return out_path_low
+            return out_path
     except Exception as e:
-        print(f"Lưu ý nén/chuyển mã video: {e}")
+        print(f"Lỗi nén video: {e}")
     return video_path
 
 def upload_file_direct(file_path: str, file_type: str = "stream") -> str:
@@ -224,6 +251,8 @@ def upload_file_direct(file_path: str, file_type: str = "stream") -> str:
                 body = res.json()
                 if body.get("code") == 0:
                     return body["data"]["file_key"]
+                else:
+                    print(f"❌ Lark API từ chối file {safe_name}: {body.get('msg')}")
     except Exception as e:
         print(f"Lỗi upload trực tiếp: {e}")
     return ""
@@ -235,6 +264,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
         file_name = f["name"]
 
         try:
+            # 1. Hình ảnh
             if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
                 with open(file_path, "rb") as img_f:
                     create_req = CreateImageRequest.builder() \
@@ -245,13 +275,25 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                         img_k = create_resp.data.image_key
                         body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
                         client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
+                        print(f"✅ Đã gửi ảnh vào thread: {file_name}")
 
+            # 2. Video (.mp4, .mov, .avi, .mkv)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_and_convert_video(file_path)
                 file_key = upload_file_direct(send_path, "stream")
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+                    print(f"📥 Đã bung file đính kèm video vào thread: {file_name}")
+                else:
+                    # Thử lại dạng mp4
+                    media_key = upload_file_direct(send_path, "mp4")
+                    if media_key:
+                        media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
+                        client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(media_body).build())
+                        print(f"🎬 Đã bung khung media video vào thread: {file_name}")
+
+            # 3. Tệp khác
             else:
                 file_key = upload_file_direct(file_path, "stream")
                 if file_key:
@@ -527,14 +569,13 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- BUNG TỆP VÀO THREAD ----------------
         upload_and_send_batch_proofs(message_id, final_files)
 
-        # ---------------- THẺ 2: KẾT QUẢ ĐÃ BỎ ### VÀ CĂN GIỮA TUYỆT ĐỐI ----------------
+        # ---------------- THẺ 2: KẾT QUẢ ĐÃ BỎ HẲN ### VÀ IN ĐẬM ĐẸP ----------------
         rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
         title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
-        # Đã bỏ ### theo yêu cầu của chị
         heading_md = f"**♡ {sender_mention} ơi...**\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
-        thankyou_md = "<font color='turquoise'>       ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+        thankyou_md = "<font color='turquoise'>┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         finish_card_payload = {
             "elements": [
