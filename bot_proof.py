@@ -120,7 +120,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def clean_file_display_name(filename: str) -> str:
@@ -162,50 +162,41 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- 4. NÉN SIÊU NHANH BẰNG CẤU HÌNH NHẸ NHẤT CHO CPU FREE -----------------
+# ----------------- 4. NÉN SIÊU TỐC VÀ CHUYỂN ĐỔI .MOV/MP4 VỀ < 10MB -----------------
 def compress_and_convert_video(video_path: str) -> str:
-    """Nén video ép dung lượng về dưới 8MB trong 3-6s, không bị timeout CPU"""
+    """Chuyển đổi cả .MOV lẫn .MP4 về chuẩn h264 yuv420p siêu nhẹ và nhanh"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
-        name, ext = os.path.splitext(video_path)
-        is_mov_or_other = ext.lower() in [".mov", ".mkv", ".avi", ".webm"]
+        dir_name = os.path.dirname(video_path)
 
-        # Nếu file đã dưới 20MB và là mp4 chuẩn thì không cần nén
-        if not is_mov_or_other and size_mb <= 20.0:
-            return video_path
+        out_path = os.path.join(dir_name, "processed_compressed.mp4")
 
-        out_path = f"{name}_cmp.mp4"
-
-        # Cấu hình siêu nhẹ: 320p, fps 12, crf 40, preset ultrafast
+        # Cấu hình tối ưu tương thích MOV iPhone, scale 360p, ultrafast
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",
+            "-threads", "2",
             "-i", video_path,
-            "-vf", "scale='min(320,iw)':-2,fps=12",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "40",
-            "-c:a", "aac", "-b:a", "24k", "-ac", "1",
+            "-vf", "scale='min(360,iw)':-2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "38",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "32k", "-ac", "1",
             "-movflags", "+faststart",
             out_path
         ]
         
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45)
         gc.collect()
 
         if proc.returncode == 0 and os.path.exists(out_path):
-            new_size_mb = os.path.getsize(out_path) / (1024 * 1024)
-            if new_size_mb > 0 and new_size_mb <= 25.0:
-                print(f"⚡ Đã nén video thành công: {os.path.basename(out_path)} ({new_size_mb:.2f} MB)")
+            new_size = os.path.getsize(out_path) / (1024 * 1024)
+            if new_size > 0:
+                print(f"⚡ Nén/Chuyển đổi thành công: {new_size:.2f} MB")
                 return out_path
     except Exception as e:
-        print(f"Lỗi nén video: {e}")
+        print(f"Lỗi khi nén video: {e}")
     return video_path
 
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
-    # Nếu file vẫn vượt quá 28MB thì không upload để tránh lỗi 400
-    if os.path.getsize(file_path) / (1024 * 1024) > 28.0:
-        print(f"⚠️ File vượt quá 28MB, bỏ qua upload để tránh lỗi API")
-        return ""
-
     token = get_tenant_access_token()
     if not token:
         return ""
@@ -449,7 +440,7 @@ def download_proof(url: str, target_dir: str) -> bool:
         save_path = os.path.join(target_dir, save_name)
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-        res = global_session.get(final_url, headers=headers, stream=True, timeout=60, verify=False)
+        res = global_session.get(final_url, headers=headers, stream=True, timeout=90, verify=False)
         if res.status_code == 200:
             with open(save_path, "wb") as f:
                 for chunk in res.iter_content(chunk_size=4 * 1024 * 1024):
