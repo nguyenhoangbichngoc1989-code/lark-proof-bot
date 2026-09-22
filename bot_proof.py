@@ -9,7 +9,6 @@ import threading
 import datetime
 import unicodedata
 import zipfile
-import base64
 import http.server
 import socketserver
 import requests
@@ -21,7 +20,6 @@ import urllib3
 from PIL import Image
 import pillow_heif
 
-# Cấu hình an toàn cho static_ffmpeg
 try:
     import static_ffmpeg
     static_ffmpeg.add_paths()
@@ -71,7 +69,7 @@ def run_dummy_web_server():
     port = int(os.environ.get("PORT", 10000))
     try:
         with socketserver.TCPServer(("", port), RenderHealthHandler) as httpd:
-            print(f"🌐 Đã mở cổng HTTP {port} để giữ dịch vụ Render hoạt động...")
+            print(f"🌐 Đã mở cổng HTTP {port} để duy trì dịch vụ...")
             httpd.serve_forever()
     except Exception as e:
         print(f"Lưu ý server HTTP: {e}")
@@ -166,24 +164,23 @@ def send_text_message(receive_id: str, text: str, receive_id_type: str = "open_i
     except Exception as e:
         print(f"Lỗi gửi tin nhắn: {e}")
 
-# ----------------- 4. NÉN VIDEO SIÊU NHẸ & AN TOÀN TRÊN RENDER -----------------
+# ----------------- 4. NÉN VIDEO & UPLOAD CHUẨN LARK API -----------------
 def compress_video_if_large(video_path: str) -> str:
-    """Nén video nếu vượt 24MB, hạn chế tiêu tốn RAM Render để tránh bị treo"""
+    """Nén video nếu vượt quá 24MB để đảm bảo Lark chấp nhận tải lên"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
-        if size_mb <= 24.0:
+        if size_mb <= 24.0 and video_path.lower().endswith(".mp4"):
             return video_path
 
-        name, ext = os.path.splitext(video_path)
+        name, _ = os.path.splitext(video_path)
         compressed_path = f"{name}_cmp.mp4"
 
-        # Cấu hình chuẩn tránh tràn RAM và block I/O
         cmd = [
             "ffmpeg", "-y", "-nostdin",
             "-threads", "2",
             "-i", video_path,
             "-vf", "scale='min(640,iw)':-2,fps=20",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "34",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
             "-c:a", "aac", "-b:a", "32k", "-ac", "1",
             compressed_path
         ]
@@ -191,12 +188,39 @@ def compress_video_if_large(video_path: str) -> str:
         gc.collect()
 
         if os.path.exists(compressed_path) and os.path.getsize(compressed_path) > 1000:
+            print(f"⚡ Đã nén video thành công: {os.path.basename(compressed_path)} ({format_size(os.path.getsize(compressed_path))})")
             return compressed_path
     except Exception as e:
         print(f"Lưu ý nén video: {e}")
     return video_path
 
-def upload_file_direct(file_path: str, file_type: str) -> str:
+def upload_video_for_stream(file_path: str) -> str:
+    """Upload video vào resource của Lark để phát trực tiếp khung video trong tin nhắn"""
+    token = get_tenant_access_token()
+    if not token:
+        return ""
+    
+    url = f"{TARGET_DOMAIN}/open-apis/im/v1/messages/resources?type=video"
+    raw_name = os.path.basename(file_path)
+    safe_name = sanitize_filename(raw_name)
+
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        with open(file_path, "rb") as f:
+            files = {"file": (safe_name, f, "video/mp4")}
+            res = global_session.post(url, headers=headers, files=files, timeout=300)
+            if res.status_code == 200:
+                body = res.json()
+                if body.get("code") == 0:
+                    return body.get("data", {}).get("file_key", "")
+                else:
+                    print(f"Lark Resource API lỗi: {body}")
+    except Exception as e:
+        print(f"Lỗi upload video resource: {e}")
+    return ""
+
+def upload_file_direct(file_path: str, file_type: str = "stream") -> str:
+    """Upload tệp đính kèm thông thường qua im/v1/files"""
     token = get_tenant_access_token()
     if not token:
         return ""
@@ -217,16 +241,18 @@ def upload_file_direct(file_path: str, file_type: str) -> str:
                 if body.get("code") == 0:
                     return body["data"]["file_key"]
     except Exception as e:
-        print(f"Lỗi upload trực tiếp: {e}")
+        print(f"Lỗi upload file: {e}")
     return ""
 
 def upload_and_send_batch_proofs(message_id: str, final_files: list):
+    """Bung từng tệp video và hình ảnh vào Thread"""
     for f in final_files:
         file_path = f["path"]
         file_ext = f["ext"]
         file_name = f["name"]
 
         try:
+            # 1. Nếu là tệp ảnh
             if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
                 with open(file_path, "rb") as img_f:
                     create_req = CreateImageRequest.builder() \
@@ -237,30 +263,36 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                         img_k = create_resp.data.image_key
                         body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
                         client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
+                        print(f"✅ Đã gửi ảnh vào thread: {file_name}")
 
+            # 2. Nếu là tệp video
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_video_if_large(file_path)
-                
-                # Gửi khung video phát trực tiếp
-                media_key = upload_file_direct(send_path, "mp4")
-                if media_key:
-                    media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
+
+                # Gửi khung video có thể xem ngay
+                video_key = upload_video_for_stream(send_path)
+                if video_key:
+                    media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": video_key})).msg_type("media").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(media_body).build())
+                    print(f"🎬 Đã bung khung phát video: {file_name}")
 
-                # Gửi tệp đính kèm tải về
-                stream_key = upload_file_direct(send_path, "stream")
-                if stream_key:
-                    file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": stream_key})).msg_type("file").reply_in_thread(True).build()
+                # Gửi tệp đính kèm để tải về máy
+                file_key = upload_file_direct(send_path, "stream")
+                if file_key:
+                    file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+                    print(f"📥 Đã gửi tệp đính kèm: {file_name}")
 
+            # 3. Các loại tệp khác
             else:
                 file_key = upload_file_direct(file_path, "stream")
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+                    print(f"📎 Đã gửi tệp: {file_name}")
 
         except Exception as e:
-            print(f"Lỗi gửi tệp {file_name}: {e}")
+            print(f"Lỗi gửi media {file_name}: {e}")
 
         gc.collect()
 
@@ -418,7 +450,7 @@ def download_proof(url: str, target_dir: str) -> bool:
             if match:
                 return download_single_gdrive_file(match.group(1), target_dir)
 
-    # 2. Link trực tiếp (FPT Cloud S3, Tikinow,...)
+    # 2. Link trực tiếp S3 FPT Cloud
     try:
         parsed_url = urllib.parse.urlparse(final_url)
         path_name = os.path.basename(parsed_url.path)
@@ -544,7 +576,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     }
     reply_thread_card(message_id, report_card_payload)
 
-    # ---------------- GỬI TỆP VÀO THREAD ----------------
+    # ---------------- GỬI BUNG TỆP VÀO THREAD ----------------
     upload_and_send_batch_proofs(message_id, final_files)
 
     # ---------------- THẺ 2: KẾT QUẢ VỚI LEVEL 3 HEADING & CĂN GIỮA TUYỆT ĐỐI ----------------
@@ -552,11 +584,7 @@ def process_request(message_id: str, chat_id: str, text: str, sender_id: str):
     title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
     
     sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
-    
-    # Cú pháp Level 3 Heading chuẩn Markdown Lark
     heading_md = f"### ♡ {sender_mention} ơi...\n\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
-    
-    # Khối thank you căn giữa đối xứng tuyệt đối
     thankyou_md = "<font color='turquoise'>┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
     finish_card_payload = {
@@ -632,7 +660,7 @@ def silent_ignored_handler(data) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF (PHIÊN BẢN HOÀN THIỆN ĐẦY ĐỦ 2 THẺ & MEDIA)...")
+    print("🚀 BOT LARK PROOF (PHIÊN BẢN CHUẨN MEDIA RESOURCES)...")
     threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
     builder = lark.EventDispatcherHandler.builder("", "")
