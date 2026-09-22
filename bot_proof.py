@@ -19,14 +19,16 @@ import urllib3
 from PIL import Image
 import pillow_heif
 
+# ----------------- NẠP FFMPEG CHUẨN XÁC -----------------
 FFMPEG_EXEC = "ffmpeg"
 try:
     import static_ffmpeg
     static_ffmpeg.add_paths()
-except Exception:
-    pass
+    FFMPEG_EXEC = shutil.which("ffmpeg") or "ffmpeg"
+except Exception as e:
+    print(f"Lưu ý static_ffmpeg: {e}")
 
-if shutil.which("ffmpeg"):
+if not shutil.which(FFMPEG_EXEC):
     FFMPEG_EXEC = "ffmpeg"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -174,21 +176,19 @@ def send_text_message(receive_id: str, text: str, receive_id_type: str = "open_i
     except Exception as e:
         print(f"Lỗi gửi tin nhắn: {e}")
 
-# ----------------- 4. NÉN VIDEO BẢO ĐẢM < 20MB ĐỂ UPLOAD THÀNH CÔNG -----------------
+# ----------------- 4. NÉN VIDEO BẢO ĐẢM < 20MB & UPLOAD CHUẨN -----------------
 def compress_and_convert_video(video_path: str) -> str:
-    """Đảm bảo mọi video gửi lên đều nhỏ hơn 24MB, tương thích 100% với Lark"""
+    """Nén video ép kích thước về dưới 20MB để upload vào Lark chắc chắn thành công"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         name, ext = os.path.splitext(video_path)
         is_mov_or_other = ext.lower() in [".mov", ".mkv", ".avi", ".webm"]
 
-        # Nếu đã dưới 23MB và chuẩn định dạng mp4 thì gửi trực tiếp
-        if not is_mov_or_other and size_mb <= 23.0:
+        # Nếu file mp4 đã nhỏ hơn 20MB thì không cần nén lại
+        if not is_mov_or_other and size_mb <= 20.0:
             return video_path
 
         out_path = f"{name}_compressed.mp4"
-
-        # Cấu hình nén nhanh, nhẹ, giảm phân giải để đưa dung lượng xuống dưới 20MB
         scale = "scale='min(480,iw)':-2,fps=18"
         crf = "32"
         if size_mb > 50:
@@ -211,8 +211,7 @@ def compress_and_convert_video(video_path: str) -> str:
 
         if proc.returncode == 0 and os.path.exists(out_path):
             compressed_size = os.path.getsize(out_path) / (1024 * 1024)
-            # Nếu file nén vẫn còn > 23MB thì nén bước 2 quyết liệt hơn
-            if compressed_size > 23.0:
+            if compressed_size > 20.0:
                 out_path_low = f"{name}_low.mp4"
                 cmd_low = [
                     FFMPEG_EXEC, "-y", "-nostdin",
@@ -221,6 +220,7 @@ def compress_and_convert_video(video_path: str) -> str:
                     "-vf", "scale='min(320,iw)':-2,fps=15",
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "38",
                     "-c:a", "aac", "-b:a", "16k", "-ac", "1",
+                    "-movflags", "+faststart",
                     out_path_low
                 ]
                 subprocess.run(cmd_low, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
@@ -228,10 +228,11 @@ def compress_and_convert_video(video_path: str) -> str:
                     return out_path_low
             return out_path
     except Exception as e:
-        print(f"Lỗi nén video: {e}")
+        print(f"Lưu ý nén video: {e}")
     return video_path
 
-def upload_file_direct(file_path: str, file_type: str = "stream") -> str:
+def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
+    """Tải file lên Lark endpoint /open-apis/im/v1/files"""
     token = get_tenant_access_token()
     if not token:
         return ""
@@ -252,12 +253,15 @@ def upload_file_direct(file_path: str, file_type: str = "stream") -> str:
                 if body.get("code") == 0:
                     return body["data"]["file_key"]
                 else:
-                    print(f"❌ Lark API từ chối file {safe_name}: {body.get('msg')}")
+                    print(f"❌ Lark API Upload từ chối ({file_type}): {body}")
+            else:
+                print(f"❌ Lỗi HTTP khi upload: {res.status_code} - {res.text}")
     except Exception as e:
-        print(f"Lỗi upload trực tiếp: {e}")
+        print(f"Lỗi gọi API upload: {e}")
     return ""
 
 def upload_and_send_batch_proofs(message_id: str, final_files: list):
+    """Gửi trực tiếp từng ảnh và video vào Thread qua Lark SDK"""
     for f in final_files:
         file_path = f["path"]
         file_ext = f["ext"]
@@ -275,27 +279,36 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                         img_k = create_resp.data.image_key
                         body = ReplyMessageRequestBody.builder().content(json.dumps({"image_key": img_k})).msg_type("image").reply_in_thread(True).build()
                         client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
-                        print(f"✅ Đã gửi ảnh vào thread: {file_name}")
+                        print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Video (.mp4, .mov, .avi, .mkv)
+            # 2. Tệp Video (.mp4, .mov, v.v.)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_and_convert_video(file_path)
-                file_key = upload_file_direct(send_path, "stream")
-                if file_key:
-                    file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
-                    client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
-                    print(f"📥 Đã bung file đính kèm video vào thread: {file_name}")
-                else:
-                    # Thử lại dạng mp4
-                    media_key = upload_file_direct(send_path, "mp4")
-                    if media_key:
-                        media_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": media_key})).msg_type("media").reply_in_thread(True).build()
-                        client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(media_body).build())
-                        print(f"🎬 Đã bung khung media video vào thread: {file_name}")
 
-            # 3. Tệp khác
+                # Thử upload với file_type là "mp4" trước
+                file_key = upload_lark_file(send_path, "mp4")
+                if not file_key:
+                    # Fallback sang stream
+                    file_key = upload_lark_file(send_path, "stream")
+
+                if file_key:
+                    # Gửi file đính kèm vào Thread
+                    file_body = ReplyMessageRequestBody.builder() \
+                        .content(json.dumps({"file_key": file_key})) \
+                        .msg_type("file") \
+                        .reply_in_thread(True) \
+                        .build()
+                    reply_resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+                    if reply_resp and reply_resp.success():
+                        print(f"📥 Đã bung video thành công vào thread: {file_name}")
+                    else:
+                        print(f"❌ Lỗi gửi reply file: {reply_resp.code} - {reply_resp.msg}")
+                else:
+                    print(f"⚠️ Không nhận được file_key cho video: {file_name}")
+
+            # 3. Tệp tài liệu khác
             else:
-                file_key = upload_file_direct(file_path, "stream")
+                file_key = upload_lark_file(file_path, "stream")
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
                     client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
@@ -559,9 +572,8 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             f"      ╰┄▸ 💾 <text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
             f"                ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
             f"• 🎬 : {file_count} file\n"
-            f"{files_str}\n\n"
-            f"⌛ *<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．</text_tag>*\n"
-            f"*<text_tag color='yellow'>███████▒▒▒ 8O %</text_tag>*"
+            f"  {files_str}\n\n"
+            f"⌛*<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O %</text_tag>*\n"
         )
 
         reply_thread_card(message_id, {"elements": [{"tag": "markdown", "content": header_block}]})
@@ -574,8 +586,8 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅 ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
-        heading_md = f"**♡ {sender_mention} ơi...**\n╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
-        thankyou_md = "<font color='turquoise'>┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+        heading_md = f"**♡ {sender_mention} ơi...**\n  ╰┄▸ 🎫 <text_tag color='carmine'>{ticket_id}</text_tag>"
+        thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         finish_card_payload = {
             "elements": [
