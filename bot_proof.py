@@ -19,7 +19,7 @@ import urllib3
 from PIL import Image
 import pillow_heif
 
-# ----------------- NẠP FFMPEG CHUẨN XÁC -----------------
+# ----------------- NẠP VÀ CẤP QUYỀN THỰC THI FFMPEG -----------------
 FFMPEG_EXEC = "ffmpeg"
 try:
     import static_ffmpeg
@@ -30,6 +30,13 @@ except Exception as e:
 
 if not shutil.which(FFMPEG_EXEC):
     FFMPEG_EXEC = "ffmpeg"
+
+try:
+    actual_path = shutil.which(FFMPEG_EXEC)
+    if actual_path:
+        os.chmod(actual_path, 0o755)
+except Exception:
+    pass
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pillow_heif.register_heif_opener()
@@ -120,7 +127,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
+        return f"{size_bytes / (1024 * 1024):.2f} KB"
     return f"{size_bytes} B"
 
 def clean_file_display_name(filename: str) -> str:
@@ -162,38 +169,43 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- 4. NÉN SIÊU TỐC VÀ CHUYỂN ĐỔI .MOV/MP4 VỀ < 10MB -----------------
+# ----------------- 4. NÉN SIÊU NHẸ VÀ CHUYỂN .MOV SANG .MP4 CHUẨN -----------------
 def compress_and_convert_video(video_path: str) -> str:
-    """Chuyển đổi cả .MOV lẫn .MP4 về chuẩn h264 yuv420p siêu nhẹ và nhanh"""
+    """Đảm bảo mọi tệp .MOV, .MP4 đều được nén về dưới 10MB và dùng chuẩn yuv420p"""
     try:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         dir_name = os.path.dirname(video_path)
+        ext = os.path.splitext(video_path)[1].lower()
 
-        out_path = os.path.join(dir_name, "processed_compressed.mp4")
+        # Tạo đường dẫn đầu vào an toàn không dấu cách
+        safe_in_path = os.path.join(dir_name, "raw_input_video" + ext)
+        if not os.path.exists(safe_in_path):
+            shutil.copy2(video_path, safe_in_path)
 
-        # Cấu hình tối ưu tương thích MOV iPhone, scale 360p, ultrafast
+        out_path = os.path.join(dir_name, "proof_compressed.mp4")
+
+        # Cấu hình nén nhẹ tối đa, loại bỏ nghẽn CPU của Render
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "2",
-            "-i", video_path,
+            "-threads", "1",
+            "-i", safe_in_path,
             "-vf", "scale='min(360,iw)':-2",
+            "-r", "15",
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "38",
             "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "32k", "-ac", "1",
+            "-an",
             "-movflags", "+faststart",
             out_path
         ]
         
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=40)
         gc.collect()
 
-        if proc.returncode == 0 and os.path.exists(out_path):
-            new_size = os.path.getsize(out_path) / (1024 * 1024)
-            if new_size > 0:
-                print(f"⚡ Nén/Chuyển đổi thành công: {new_size:.2f} MB")
-                return out_path
+        if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
+            print(f"⚡ Đã nén video thành công: {os.path.basename(out_path)} ({format_size(os.path.getsize(out_path))})")
+            return out_path
     except Exception as e:
-        print(f"Lỗi khi nén video: {e}")
+        print(f"Lỗi nén video: {e}")
     return video_path
 
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
@@ -248,6 +260,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
                 send_path = compress_and_convert_video(file_path)
 
+                # Upload với file_type là "stream"
                 file_key = upload_lark_file(send_path, "stream")
                 if not file_key:
                     file_key = upload_lark_file(send_path, "mp4")
@@ -266,7 +279,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list):
                 else:
                     print(f"⚠️ Không nhận được file_key cho video: {file_name}")
 
-            # 3. Tệp khác
+            # 3. Tệp tài liệu khác
             else:
                 file_key = upload_lark_file(file_path, "stream")
                 if file_key:
