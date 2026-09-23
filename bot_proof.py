@@ -131,7 +131,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def sanitize_filename(filename: str) -> str:
@@ -283,7 +283,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
 
         try:
             # 1. Hình ảnh
-            if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]:
+            if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".jfif", ".svg", ".tiff"]:
                 with open(file_path, "rb") as img_f:
                     create_req = CreateImageRequest.builder() \
                         .request_body(CreateImageRequestBody.builder().image_type("message").image(img_f).build()) \
@@ -298,7 +298,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
             # 2. Tệp Video
-            elif file_ext in [".mp4", ".mov", ".avi", ".mkv"]:
+            elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = compress_and_convert_video(file_path, original_name=file_name)
                 size_mb = os.path.getsize(send_path) / (1024 * 1024)
 
@@ -317,7 +317,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
                         actual_sent_count += 1
                         print(f"📥 Đã bung video: {os.path.basename(send_path)}")
 
-            # 3. Tệp khác
+            # 3. Tệp khác (Âm thanh, Tài liệu, PDF...)
             else:
                 if os.path.getsize(file_path) / (1024 * 1024) <= 28.0:
                     file_key = upload_lark_file(file_path, "stream")
@@ -326,6 +326,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
                         resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                         if resp and resp.success():
                             actual_sent_count += 1
+                            print(f"📎 Đã bung tệp: {file_name}")
         except Exception as e:
             print(f"Lỗi gửi media: {e}")
 
@@ -333,50 +334,49 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK & TẢI AN TOÀN TUYỆT ĐỐI (KHÔNG TRÀN RAM) -----------------
+# ----------------- 5. GIẢI MÃ LINK THÔNG MINH (HỖ TRỢ TOÀN DIỆN BYVN.NET) -----------------
 def resolve_proof_url(url: str) -> str:
     if any(ext in url.lower() for ext in [".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm"]):
         return url
 
-    if "stream.aspx" in url and "id=" in url:
-        m = re.search(r'id=([^&]+)', url)
-        if m:
-            file_server_path = urllib.parse.unquote(m.group(1))
-            tenant_base = url.split("/personal/")[0]
-            return f"{tenant_base}/personal/{file_server_path.split('/personal/')[1]}?download=1"
-
-    if "sharepoint.com" in url or "1drv.ms" in url:
-        sep = "&" if "?" in url else "?"
-        if "download=1" not in url:
-            return f"{url}{sep}download=1"
-        return url
-
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
     }
     cur_url = url
 
-    if "acesse.one" in cur_url or "encurtador.dev" in cur_url:
+    if "byvn.net" in cur_url:
         try:
-            code = cur_url.rstrip("/").split("/")[-1]
-            api_url = f"https://encurtador.dev/api/link/{code}"
-            r_api = global_session.get(api_url, headers=headers, timeout=6, verify=False)
-            if r_api.status_code == 200:
-                data = r_api.json()
-                dest = data.get("link", {}).get("destination") or data.get("destination") or data.get("url")
-                if dest:
-                    return dest
-        except Exception:
-            pass
+            r_byvn = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=12, verify=False)
+            if r_byvn.url != cur_url and ("drive.google.com" in r_byvn.url or "sharepoint" in r_byvn.url):
+                return r_byvn.url
 
-    if "bom.so" in cur_url:
-        try:
-            r_bom = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=8, verify=False)
-            if r_bom.url != cur_url:
-                return r_bom.url
-        except Exception:
-            pass
+            html = r_byvn.text
+            found = re.findall(r'(https?://(?:drive\.google\.com|[^"\'\s<>]+\.sharepoint\.com)[^"\'\s<>]*)', html)
+            if found:
+                return found[0].replace("&amp;", "&")
+
+            js_loc = re.search(r'(?:window\.location(?:\.href)?|location\.replace)\s*=\s*["\']([^"\']+)["\']', html)
+            if js_loc:
+                dest = js_loc.group(1).replace("&amp;", "&")
+                if "http" in dest:
+                    return dest
+        except Exception as e:
+            print(f"Lỗi giải mã byvn.net: {e}")
+
+    if "stream.aspx" in cur_url and "id=" in cur_url:
+        m = re.search(r'id=([^&]+)', cur_url)
+        if m:
+            file_server_path = urllib.parse.unquote(m.group(1))
+            tenant_base = cur_url.split("/personal/")[0]
+            return f"{tenant_base}/personal/{file_server_path.split('/personal/')[1]}?download=1"
+
+    if "sharepoint.com" in cur_url or "1drv.ms" in cur_url:
+        sep = "&" if "?" in cur_url else "?"
+        if "download=1" not in cur_url:
+            return f"{cur_url}{sep}download=1"
+        return url
 
     for _ in range(3):
         try:
@@ -478,8 +478,7 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 
             matches = re.findall(r'\["([a-zA-Z0-9_-]{28,45})",\["([^"]+)"', html)
             for fid, fname in matches:
-                if any(ext in fname.lower() for ext in [".jfif", ".mp4", ".mov", ".avi", ".mkv", ".jpg", ".png", ".jpeg", ".webp"]):
-                    found_files[fid] = fname
+                found_files[fid] = fname
 
             if found_files:
                 success_count = 0
@@ -545,6 +544,8 @@ def download_proof(url: str, target_dir: str) -> bool:
 
             if os.path.exists(save_path) and os.path.getsize(save_path) > 1000:
                 return True
+            elif os.path.exists(save_path):
+                os.remove(save_path)
     except Exception as e:
         print(f"Lỗi tải trực tiếp: {e}")
 
@@ -602,7 +603,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         for root, _, fs in os.walk(task_temp_dir):
             for f in fs:
                 raw_path = os.path.join(root, f)
-                if os.path.getsize(raw_path) > 500:
+                if os.path.getsize(raw_path) > 1000:
                     final_files.append({
                         "name": f,
                         "path": raw_path,
@@ -622,7 +623,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                         {
                             "tag": "markdown",
                             "content": (
-                                f"📁 **ĐƠN HÀNG: {ticket_id}**\n\n"
+                                f"📁 **𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}**\n\n"
                                 f"<font color='orange'>⚠️ Link được chia sẻ là **Thư mục SharePoint nội bộ**, bot không thể tải tự động do cơ chế bảo mật của Microsoft.</font>\n\n"
                                 f"👉 [**Bấm vào đây để mở trực tiếp Thư mục SharePoint**]({first_url})\n\n"
                                 f"<font color='grey'>💡 *Mẹo: Hãy bấm vào dấu 3 chấm cạnh video và chọn 'Sao chép liên kết' (Copy link) của riêng video đó rồi gửi lại cho bot nhé!*</font>"
@@ -633,7 +634,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                 reply_thread_card(message_id, sharepoint_card)
             else:
                 reply_thread_card(message_id, {
-                    "elements": [{"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của đơn {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"}]
+                    "elements": [{"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"}]
                 })
             shutil.rmtree(task_temp_dir, ignore_errors=True)
             return
@@ -641,6 +642,40 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         record_successful_request(ticket_id, req_count)
         total_size = sum(x["size"] for x in final_files)
         file_count = len(final_files)
+
+        # ---------------- PHÂN LOẠI NHÓM ĐỊNH DẠNG FILE BẬC THANG ----------------
+        video_exts = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"}
+        image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".jfif", ".svg", ".tiff"}
+        audio_exts = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma", ".opus"}
+
+        c_video = sum(1 for x in final_files if x["ext"] in video_exts)
+        c_image = sum(1 for x in final_files if x["ext"] in image_exts)
+        c_audio = sum(1 for x in final_files if x["ext"] in audio_exts)
+        c_doc = sum(1 for x in final_files if x["ext"] not in (video_exts | image_exts | audio_exts))
+
+        cat_hierarchy = [
+            ("🎞️", c_video),
+            ("🖼️", c_image),
+            ("📼", c_audio),
+            ("📑", c_doc),
+        ]
+
+        indent_steps = [
+            "  ",                                              # Cấp 1
+            "                ",                                # Cấp 2
+            "                               ",                 # Cấp 3
+            "                                             "   # Cấp 4
+        ]
+
+        group_lines = [f"🗂️: {file_count} file"]
+        step_idx = 0
+        for icon, count in cat_hierarchy:
+            if count > 0:
+                indent = indent_steps[step_idx] if step_idx < len(indent_steps) else " " * (2 + step_idx * 14)
+                group_lines.append(f"{indent}╰┈➤{icon} : {count} file")
+                step_idx += 1
+
+        summary_group_str = "\n".join(group_lines)
 
         # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU ----------------
         file_lines = []
@@ -654,7 +689,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
             f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
             f"         ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
-            f"• 🎬 : {file_count} file\n"
+            f"{summary_group_str}\n\n"
             f"{files_str}\n\n"
             f"⌛*<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O %</text_tag>*"
         )
@@ -664,7 +699,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- BUNG TỆP VÀO THREAD ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files)
 
-        # ---------------- THẺ 2: KẾT QUẢ IN ĐẬM VÀ CĂN GIỮA TUYỆT ĐỐI ----------------
+        # ---------------- THẺ 2: KẾT QUẢ HOÀN TẤT ----------------
         rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
         title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
@@ -761,7 +796,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TỐI ƯU BỘ NHỚ RAM CHỐNG SẬP)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ CẬP NHẬT PHÂN NHÓM BẬC THANG)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
