@@ -81,6 +81,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = os.path.join(BASE_DIR, "temp_files")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
 
+FOOTER_RAIN_TEXT = "**<text_tag color='indigo'>🌧️ ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...🌧️</text_tag>**"
+
 PROCESSED_MESSAGES = set()
 
 global_session = requests.Session()
@@ -167,9 +169,8 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- CHUYỂN ĐỔI CHUẨN XÁC WEBM / KHÔNG ĐUÔI SANG MP4 -----------------
+# ----------------- CHUYỂN ĐỔI CHUẨN XÁC WEBM / RAW VIDEO SANG MP4 -----------------
 def convert_to_valid_mp4(file_path: str) -> str:
-    """Chuyển đổi thực sự mã hóa WebM / raw video sang MP4 H.264 để xem được trên Lark"""
     try:
         dir_name = os.path.dirname(file_path)
         base_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -223,17 +224,13 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
             with open(file_path, "rb") as f:
                 header = f.read(128)
 
-            # Nhận dạng WebM (EBML header)
             if header.startswith(b"\x1a\x45\xdf\xa3"):
                 is_video = True
                 is_webm = True
-            # Nhận dạng MP4 / QuickTime MOV / Matroska / AVI
             elif b"ftyp" in header[:32] or b"moov" in header[:64] or b"mdat" in header[:64]:
                 is_video = True
             elif (header.startswith(b"RIFF") and b"AVI " in header[8:16]) or header.startswith(b"FLV"):
                 is_video = True
-
-            # Nhận dạng Ảnh
             elif header.startswith(b"\xff\xd8\xff") or header.startswith(b"\x89PNG\r\n\x1a\n") or header.startswith(b"GIF8"):
                 is_image = True
             elif header.startswith(b"RIFF") and b"WEBP" in header[8:16]:
@@ -245,18 +242,15 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
         if ext == ".webm" or "webm" in fname_low:
             is_webm = True
 
-        # Nếu là WebM (từ aliyuncs, rc-upload hoặc có đuôi .webm), bắt buộc chuyển đổi sang .mp4 chuẩn
         if is_webm or (is_video and ext in [".webm", ""]):
             return convert_to_valid_mp4(file_path)
 
-        # Đổi tên tệp video thiếu đuôi
         if is_video and ext not in [".mp4", ".mov", ".avi", ".mkv"]:
             new_file_name = f"{name}.mp4"
             new_path = os.path.join(dir_name, new_file_name)
             os.rename(file_path, new_path)
             return new_path
 
-        # Đổi tên ảnh thiếu đuôi
         if is_image and ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic"]:
             new_file_name = f"{name}.jpg"
             new_path = os.path.join(dir_name, new_file_name)
@@ -310,7 +304,6 @@ def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         ext = os.path.splitext(video_path)[1].lower()
 
-        # Nếu đã là mp4 và nhẹ dưới 25MB thì gửi luôn
         if ext == ".mp4" and size_mb <= 25.0:
             return video_path
 
@@ -398,7 +391,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
                             actual_sent_count += 1
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video (bao gồm cả file rc-upload/WebM đã chuyển sang .mp4)
+            # 2. Tệp Video
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = compress_and_convert_video(file_path, original_name=file_name)
                 size_mb = os.path.getsize(send_path) / (1024 * 1024)
@@ -437,7 +430,6 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
 
 # ----------------- 5. GIẢI MÃ LINK THÔNG MINH (HỖ TRỢ ALIYUNCS, OSS, BYVN) -----------------
 def resolve_proof_url(url: str) -> str:
-    # Bỏ qua ngay lập tức đối với link tải trực tiếp (Alibaba OSS, CDN, media files)
     if any(k in url.lower() for k in [
         ".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm", ".avi", ".mkv",
         "aliyuncs.com", "oss-", "rc-upload", "tiktokcdn.com", "byteoversea.com", "fptcloud.com"
@@ -630,7 +622,6 @@ def download_proof(url: str, target_dir: str) -> bool:
 
         raw_name = extracted_name or os.path.basename(urllib.parse.urlparse(final_url).path) or "downloaded_file"
 
-        # Nếu link Alibaba OSS / rc-upload mà chưa có đuôi, tự động gắn .webm để sau đó chuyển đổi sang .mp4
         if ("webm" in content_type or "rc-upload" in raw_name.lower() or "aliyuncs.com" in final_url) and "." not in raw_name:
             raw_name = f"{raw_name}.webm"
 
@@ -709,7 +700,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             print(f"⏳ Đang tải link: {u}")
             download_proof(u, task_temp_dir)
 
-        # Quét và tự động chuyển đổi WebM / aliyuncs sang MP4 trước khi thống kê
         final_files = []
         for root, _, fs in os.walk(task_temp_dir):
             for f in fs:
@@ -724,6 +714,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                         "ext": os.path.splitext(fixed_name)[1].lower()
                     })
 
+        # Xử lý khi không tải được tệp nào về máy
         if not final_files:
             print(f"❌ Không tải được file nào cho đơn {ticket_id}")
             if clock_rx_id:
@@ -741,13 +732,19 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                                 f"👉 [**Bấm vào đây để mở trực tiếp Thư mục SharePoint**]({first_url})\n\n"
                                 f"<font color='grey'>💡 *Mẹo: Hãy bấm vào dấu 3 chấm cạnh video và chọn 'Sao chép liên kết' (Copy link) của riêng video đó rồi gửi lại cho bot nhé!*</font>"
                             )
-                        }
+                        },
+                        {"tag": "hr"},
+                        {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
                     ]
                 }
                 reply_thread_card(message_id, sharepoint_card)
             else:
                 reply_thread_card(message_id, {
-                    "elements": [{"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"}]
+                    "elements": [
+                        {"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"},
+                        {"tag": "hr"},
+                        {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
+                    ]
                 })
             shutil.rmtree(task_temp_dir, ignore_errors=True)
             return
@@ -775,9 +772,9 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         indent_steps = [
             "  ",
-            "           ",
-            "                      ",
-            "                                  "
+            "                ",
+            "                               ",
+            "                                             "
         ]
 
         group_lines = [f"🗂️: {file_count} file"]
@@ -790,7 +787,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU ----------------
+        # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU (KÈM FOOTER TRỜI MƯA) ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -807,12 +804,19 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             f"⌛*<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O %</text_tag>*"
         )
 
-        reply_thread_card(message_id, {"elements": [{"tag": "markdown", "content": header_block}]})
+        loading_card_payload = {
+            "elements": [
+                {"tag": "markdown", "content": header_block},
+                {"tag": "hr"},
+                {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
+            ]
+        }
+        reply_thread_card(message_id, loading_card_payload)
 
         # ---------------- BUNG TỆP VÀO THREAD ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files)
 
-        # ---------------- THẺ 2: KẾT QUẢ HOÀN TẤT ----------------
+        # ---------------- THẺ 2: KẾT QUẢ HOÀN TẤT (KÈM FOOTER TRỜI MƯA) ----------------
         rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
         title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
@@ -836,7 +840,9 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                     "tag": "div",
                     "text": {"tag": "lark_md", "content": thankyou_md},
                     "text_align": "center"
-                }
+                },
+                {"tag": "hr"},
+                {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
             ]
         }
         reply_thread_card(message_id, finish_card_payload)
@@ -909,7 +915,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TỰ ĐỘNG CHUYỂN ALIBABA OSS / WEBM SANG MP4 NATIVE)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ CẬP NHẬT FOOTER TRỜI MƯA VÀO CÁC THẺ)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
