@@ -20,7 +20,7 @@ import urllib3
 from PIL import Image
 import pillow_heif
 
-# ----------------- 1. MỞ SERVER HTTP NGAY TỨC THÌ ĐỂ RENDER BÁO LIVE -----------------
+# ----------------- 1. MỞ SERVER HTTP DUY TRÌ RENDER -----------------
 class RenderHealthHandler(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200)
@@ -96,7 +96,7 @@ client = lark.Client.builder() \
     .log_level(lark.LogLevel.INFO) \
     .build()
 
-# ----------------- 3. QUẢN LÝ LỊCH SỬ & ĐẾM SỐ LẦN XIN -----------------
+# ----------------- 3. QUẢN LÝ LỊCH SỬ & TÍNH DUNG LƯỢNG CHUẨN XÁC -----------------
 def load_history() -> dict:
     if os.path.exists(HISTORY_FILE):
         try:
@@ -166,6 +166,68 @@ def reply_thread_card(message_id: str, card_content: dict):
             print(f"❌ Lỗi gửi Card: Code={resp.code} | Msg={resp.msg}")
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
+
+# ----------------- TỰ ĐỘNG NHẬN DIỆN MAGIC BYTES & GẮN ĐUÔI VIDEO/ẢNH -----------------
+def auto_detect_and_fix_extension(file_path: str) -> str:
+    """
+    Kiểm tra phần đầu nhị phân (magic bytes) của file.
+    Nếu là video (hoặc file rc-upload, khui...) nhưng thiếu đuôi -> tự động đổi sang .mp4
+    Nếu là ảnh nhưng thiếu đuôi -> tự động đổi sang .jpg
+    """
+    try:
+        dir_name = os.path.dirname(file_path)
+        base_name = os.path.basename(file_path)
+        name, ext = os.path.splitext(base_name)
+        ext = ext.lower()
+
+        is_video = False
+        is_image = False
+
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 32:
+            with open(file_path, "rb") as f:
+                header = f.read(128)
+
+            # Dấu hiệu nhận dạng Video MP4 / QuickTime MOV / Matroska / AVI
+            if b"ftyp" in header[:32] or b"moov" in header[:64] or b"mdat" in header[:64]:
+                is_video = True
+            elif header.startswith(b"\x1a\x45\xdf\xa3") or (header.startswith(b"RIFF") and b"AVI " in header[8:16]):
+                is_video = True
+            elif header.startswith(b"FLV"):
+                is_video = True
+
+            # Dấu hiệu nhận dạng Ảnh JPG / PNG / GIF / WEBP
+            elif header.startswith(b"\xff\xd8\xff"):
+                is_image = True
+            elif header.startswith(b"\x89PNG\r\n\x1a\n") or header.startswith(b"GIF8"):
+                is_image = True
+            elif header.startswith(b"RIFF") and b"WEBP" in header[8:16]:
+                is_image = True
+
+        # Nhận diện theo tên và dung lượng đặc trưng
+        fname_low = base_name.lower()
+        if not is_video and not is_image:
+            if any(k in fname_low for k in ["rc-upload", "video", "khui", "quay", "clip", "cam", "pack"]):
+                is_video = True
+            elif os.path.getsize(file_path) > 2 * 1024 * 1024 and ext not in [".zip", ".rar", ".pdf", ".docx", ".xlsx"]:
+                is_video = True
+
+        # Đổi tên tệp nếu thiếu đuôi chuẩn
+        if is_video and ext not in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
+            new_file_name = f"{name}.mp4"
+            new_path = os.path.join(dir_name, new_file_name)
+            os.rename(file_path, new_path)
+            print(f"🎬 Đã tự động nhận diện và gắn đuôi video: {new_file_name}")
+            return new_path
+        elif is_image and ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic"]:
+            new_file_name = f"{name}.jpg"
+            new_path = os.path.join(dir_name, new_file_name)
+            os.rename(file_path, new_path)
+            print(f"🖼️ Đã tự động nhận diện và gắn đuôi ảnh: {new_file_name}")
+            return new_path
+
+    except Exception as e:
+        print(f"Lỗi kiểm tra magic bytes: {e}")
+    return file_path
 
 # ----------------- CƠ CHẾ THẢ VÀ GỠ REACTION -----------------
 def add_reaction_to_message(message_id: str, emoji_type: str) -> str:
@@ -297,7 +359,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
                             actual_sent_count += 1
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video
+            # 2. Tệp Video (bao gồm cả file rc-upload đã được gắn .mp4)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = compress_and_convert_video(file_path, original_name=file_name)
                 size_mb = os.path.getsize(send_path) / (1024 * 1024)
@@ -315,9 +377,9 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
                     resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     if resp and resp.success():
                         actual_sent_count += 1
-                        print(f"📥 Đã bung video: {os.path.basename(send_path)}")
+                        print(f"📥 Đã bung video phát trực tiếp: {os.path.basename(send_path)}")
 
-            # 3. Tệp khác (Âm thanh, Tài liệu, PDF...)
+            # 3. Tệp khác
             else:
                 if os.path.getsize(file_path) / (1024 * 1024) <= 28.0:
                     file_key = upload_lark_file(file_path, "stream")
@@ -334,7 +396,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK THÔNG MINH (HỖ TRỢ TOÀN DIỆN BYVN.NET) -----------------
+# ----------------- 5. GIẢI MÃ LINK THÔNG MINH -----------------
 def resolve_proof_url(url: str) -> str:
     if any(ext in url.lower() for ext in [".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm"]):
         return url
@@ -599,16 +661,19 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             print(f"⏳ Đang tải link: {u}")
             download_proof(u, task_temp_dir)
 
+        # Quét và tự động gắn đuôi file theo magic bytes trước khi đưa vào thống kê
         final_files = []
         for root, _, fs in os.walk(task_temp_dir):
             for f in fs:
                 raw_path = os.path.join(root, f)
                 if os.path.getsize(raw_path) > 1000:
+                    fixed_path = auto_detect_and_fix_extension(raw_path)
+                    fixed_name = os.path.basename(fixed_path)
                     final_files.append({
-                        "name": f,
-                        "path": raw_path,
-                        "size": os.path.getsize(raw_path),
-                        "ext": os.path.splitext(f)[1].lower()
+                        "name": fixed_name,
+                        "path": fixed_path,
+                        "size": os.path.getsize(fixed_path),
+                        "ext": os.path.splitext(fixed_name)[1].lower()
                     })
 
         if not final_files:
@@ -661,10 +726,10 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         ]
 
         indent_steps = [
-            "  ",                                              # Cấp 1
-            "                ",                                # Cấp 2
-            "                               ",                 # Cấp 3
-            "                                             "   # Cấp 4
+            "  ",
+            "                ",
+            "                               ",
+            "                                             "
         ]
 
         group_lines = [f"🗂️: {file_count} file"]
@@ -796,7 +861,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ CẬP NHẬT PHÂN NHÓM BẬC THANG)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (TỰ ĐỘNG BẬT VIDEO PLAYER CHO RC-UPLOAD & TỰ THÊM .MP4)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
