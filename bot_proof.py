@@ -72,7 +72,7 @@ except Exception:
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pillow_heif.register_heif_opener()
 
-# ----------------- 2. CẤU HÌNH BIẾN MÔI TRƯỜNG & SDK LARK -----------------
+# ----------------- 2. CẤU HÌNH BIẾN MÔI TRƯỜNG & BANNER ẢNH CHO TỪNG THẺ -----------------
 APP_ID = os.environ.get("APP_ID", "").strip() or os.environ.get("LARK_APP_ID", "").strip()
 APP_SECRET = os.environ.get("APP_SECRET", "").strip() or os.environ.get("LARK_APP_SECRET", "").strip()
 TARGET_DOMAIN = getattr(lark, "LARK_DOMAIN", "https://open.larksuite.com")
@@ -80,6 +80,11 @@ TARGET_DOMAIN = getattr(lark, "LARK_DOMAIN", "https://open.larksuite.com")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = os.path.join(BASE_DIR, "temp_files")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
+
+# 🌟 CÁC BANNER TƯƠNG ỨNG CHO 3 LOẠI THẺ:
+BANNER_CARD1_KEY = "img_v3_0215r_44119ac8-f8ca-4954-a9c6-65758605dcah"  # Thẻ 1: Loading
+BANNER_ERROR_KEY = ""                                                    # Thẻ Báo Lỗi (dán khi có key)
+BANNER_COMPLETED_KEY = "img_v3_0215r_124a0bca-2990-426a-8cf2-c72aeadb7fdh"  # Thẻ 2: Hoàn Tất
 
 FOOTER_RAIN_TEXT = "**<text_tag color='indigo'>🌧️ ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...🌧️</text_tag>**"
 
@@ -428,7 +433,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK THÔNG MINH (HỖ TRỢ ALIYUNCS, OSS, BYVN) -----------------
+# ----------------- 5. GIẢI MÃ LINK THÔNG MINH -----------------
 def resolve_proof_url(url: str) -> str:
     if any(k in url.lower() for k in [
         ".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm", ".avi", ".mkv",
@@ -714,16 +719,25 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                         "ext": os.path.splitext(fixed_name)[1].lower()
                     })
 
-        # Xử lý khi không tải được tệp nào về máy
+        # ---------------- THẺ BÁO LỖI: CHÈN BANNER ẢNH 2 Ở TRÊN CÙNG ----------------
         if not final_files:
             print(f"❌ Không tải được file nào cho đơn {ticket_id}")
             if clock_rx_id:
                 remove_reaction_from_message(message_id, clock_rx_id)
 
             first_url = urls[0] if urls else ""
+            error_img_element = []
+            if BANNER_ERROR_KEY and not BANNER_ERROR_KEY.startswith("DÁN_"):
+                error_img_element.append({
+                    "tag": "img",
+                    "img_key": BANNER_ERROR_KEY,
+                    "alt": {"tag": "plain_text", "content": "Banner Error"},
+                    "mode": "fit_horizontal"
+                })
+
             if "sharepoint.com" in first_url or "1drv.ms" in first_url:
                 sharepoint_card = {
-                    "elements": [
+                    "elements": error_img_element + [
                         {
                             "tag": "markdown",
                             "content": (
@@ -740,7 +754,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                 reply_thread_card(message_id, sharepoint_card)
             else:
                 reply_thread_card(message_id, {
-                    "elements": [
+                    "elements": error_img_element + [
                         {"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"},
                         {"tag": "hr"},
                         {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
@@ -787,7 +801,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: BÁO CÁO BAN ĐẦU (KÈM FOOTER TRỜI MƯA) ----------------
+        # ---------------- THẺ 1: CHÈN BANNER ẢNH 1 Ở TRÊN CÙNG ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -804,8 +818,17 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             f"⌛*<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O %</text_tag>*"
         )
 
+        card1_img_element = []
+        if BANNER_CARD1_KEY and not BANNER_CARD1_KEY.startswith("DÁN_"):
+            card1_img_element.append({
+                "tag": "img",
+                "img_key": BANNER_CARD1_KEY,
+                "alt": {"tag": "plain_text", "content": "Banner Loading"},
+                "mode": "fit_horizontal"
+            })
+
         loading_card_payload = {
-            "elements": [
+            "elements": card1_img_element + [
                 {"tag": "markdown", "content": header_block},
                 {"tag": "hr"},
                 {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
@@ -816,7 +839,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- BUNG TỆP VÀO THREAD ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files)
 
-        # ---------------- THẺ 2: KẾT QUẢ HOÀN TẤT (KÈM FOOTER TRỜI MƯA) ----------------
+        # ---------------- THẺ 2 (HOÀN TẤT): CHÈN BANNER ẢNH 3 Ở TRÊN CÙNG ----------------
         rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
         title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
@@ -824,8 +847,17 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
+        card2_img_element = []
+        if BANNER_COMPLETED_KEY and not BANNER_COMPLETED_KEY.startswith("DÁN_"):
+            card2_img_element.append({
+                "tag": "img",
+                "img_key": BANNER_COMPLETED_KEY,
+                "alt": {"tag": "plain_text", "content": "Banner Completed"},
+                "mode": "fit_horizontal"
+            })
+
         finish_card_payload = {
-            "elements": [
+            "elements": card2_img_element + [
                 {
                     "tag": "column_set",
                     "flex_mode": "none",
@@ -847,7 +879,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, finish_card_payload)
 
-        # ---------------- ĐỔI TỪ ĐỒNG HỒ SANG BÉ RẮN SAU KHI ĐÃ BUNG ĐẦY ĐỦ 100% ----------------
+        # ---------------- 🐍 ĐỔI TỪ ĐỒNG HỒ SANG BÉ RẮN KHI HOÀN TẤT 100% ----------------
         if clock_rx_id:
             remove_reaction_from_message(message_id, clock_rx_id)
 
@@ -915,7 +947,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ CẬP NHẬT FOOTER TRỜI MƯA VÀO CÁC THẺ)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ CẬP NHẬT BANNER HOÀN TẤT CHUẨN XÁC)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
