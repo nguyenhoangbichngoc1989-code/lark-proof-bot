@@ -103,6 +103,46 @@ client = lark.Client.builder() \
     .log_level(lark.LogLevel.INFO) \
     .build()
 
+# ----------------- HÀM TẠO BANNER THU NHỎ BẰNG 1/2 VÀ CĂN GIỮA -----------------
+def build_half_size_banner(img_key: str, alt_text: str = "Banner") -> list:
+    """Tạo banner thu nhỏ còn 1/2 kích thước (50% bề ngang) và căn giữa bằng column_set"""
+    if not img_key or img_key.startswith("DÁN_"):
+        return []
+    return [
+        {
+            "tag": "column_set",
+            "flex_mode": "none",
+            "background_style": "default",
+            "columns": [
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [{"tag": "markdown", "content": ""}]
+                },
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 2,  # Chiếm chính xác 2/4 = 50% (1/2) bề ngang thẻ
+                    "elements": [
+                        {
+                            "tag": "img",
+                            "img_key": img_key,
+                            "alt": {"tag": "plain_text", "content": alt_text},
+                            "mode": "fit_horizontal"
+                        }
+                    ]
+                },
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [{"tag": "markdown", "content": ""}]
+                }
+            ]
+        }
+    ]
+
 # ----------------- 3. QUẢN LÝ LỊCH SỬ & TÍNH DUNG LƯỢNG -----------------
 def load_history() -> dict:
     if os.path.exists(HISTORY_FILE):
@@ -719,21 +759,14 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                         "ext": os.path.splitext(fixed_name)[1].lower()
                     })
 
-        # ---------------- THẺ BÁO LỖI: CHÈN BANNER ẢNH 2 Ở TRÊN CÙNG ----------------
+        # ---------------- THẺ BÁO LỖI: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA ----------------
         if not final_files:
             print(f"❌ Không tải được file nào cho đơn {ticket_id}")
             if clock_rx_id:
                 remove_reaction_from_message(message_id, clock_rx_id)
 
             first_url = urls[0] if urls else ""
-            error_img_element = []
-            if BANNER_ERROR_KEY:
-                error_img_element.append({
-                    "tag": "img",
-                    "img_key": BANNER_ERROR_KEY,
-                    "alt": {"tag": "plain_text", "content": "Banner Error"},
-                    "mode": "fit_horizontal"
-                })
+            error_img_element = build_half_size_banner(BANNER_ERROR_KEY, "Banner Error")
 
             if "sharepoint.com" in first_url or "1drv.ms" in first_url:
                 sharepoint_card = {
@@ -801,7 +834,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: BANNER ẢNH 1 Ở TRÊN CÙNG ----------------
+        # ---------------- THẺ 1: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -818,14 +851,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             f"⌛*<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O %</text_tag>*"
         )
 
-        card1_img_element = []
-        if BANNER_CARD1_KEY:
-            card1_img_element.append({
-                "tag": "img",
-                "img_key": BANNER_CARD1_KEY,
-                "alt": {"tag": "plain_text", "content": "Banner Loading"},
-                "mode": "fit_horizontal"
-            })
+        card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "Banner Loading")
 
         loading_card_payload = {
             "elements": card1_img_element + [
@@ -839,7 +865,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- BUNG TỆP VÀO THREAD ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): BANNER ẢNH 3 Ở TRÊN CÙNG ----------------
+        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
         rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
         title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
@@ -847,14 +873,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
-        card2_img_element = []
-        if BANNER_COMPLETED_KEY:
-            card2_img_element.append({
-                "tag": "img",
-                "img_key": BANNER_COMPLETED_KEY,
-                "alt": {"tag": "plain_text", "content": "Banner Completed"},
-                "mode": "fit_horizontal"
-            })
+        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Banner Completed")
 
         finish_card_payload = {
             "elements": card2_img_element + [
@@ -947,7 +966,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ CẬP NHẬT HOÀN CHỈNH BỘ 3 BANNER CHO 3 THẺ)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ GIẢM KÍCH THƯỚC BANNER XUỐNG 1/2 VÀ CĂN GIỮA)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
