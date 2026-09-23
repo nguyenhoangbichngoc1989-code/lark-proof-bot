@@ -81,8 +81,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = os.path.join(BASE_DIR, "temp_files")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
 
-# 🌟 BỘ BANNER CHO 3 TRẠNG THÁI THẺ
-BANNER_CARD1_KEY = "img_v3_0215r_44119ac8-f8ca-4954-a9c6-65758605dcah"      # Thẻ 1: Loading ban đầu
+# 🌟 BỘ 3 BANNER CHO 3 TRẠNG THÁI THẺ
+BANNER_CARD1_KEY = "img_v3_0215r_61dad065-35d7-45ba-a33d-6ab073a717ah"      # Thẻ 1: Loading ban đầu
 BANNER_ERROR_KEY = "img_v3_0215r_6e344d17-b29f-4de6-a147-177aa11fa62h"      # Thẻ Báo Lỗi / Cảnh Báo
 BANNER_COMPLETED_KEY = "img_v3_0215r_124a0bca-2990-426a-8cf2-c72aeadb7fdh"  # Thẻ 2: Hoàn Tất
 
@@ -105,7 +105,7 @@ client = lark.Client.builder() \
 
 # ----------------- HÀM TẠO BANNER THU NHỎ BẰNG 1/2 VÀ CĂN GIỮA -----------------
 def build_half_size_banner(img_key: str, alt_text: str = "Banner") -> list:
-    """Tạo banner thu nhỏ còn 1/2 kích thước (50% bề ngang) và căn giữa bằng column_set"""
+    """Tạo banner thu nhỏ còn 1/2 kích thước (50% bề ngang) và căn giữa chuẩn xác"""
     if not img_key or img_key.startswith("DÁN_"):
         return []
     return [
@@ -118,12 +118,12 @@ def build_half_size_banner(img_key: str, alt_text: str = "Banner") -> list:
                     "tag": "column",
                     "width": "weighted",
                     "weight": 1,
-                    "elements": [{"tag": "markdown", "content": ""}]
+                    "elements": [{"tag": "markdown", "content": " "}]
                 },
                 {
                     "tag": "column",
                     "width": "weighted",
-                    "weight": 2,  # Chiếm chính xác 2/4 = 50% (1/2) bề ngang thẻ
+                    "weight": 2,  # Đúng 2/4 = 50% (1/2) bề ngang thẻ
                     "elements": [
                         {
                             "tag": "img",
@@ -137,7 +137,7 @@ def build_half_size_banner(img_key: str, alt_text: str = "Banner") -> list:
                     "tag": "column",
                     "width": "weighted",
                     "weight": 1,
-                    "elements": [{"tag": "markdown", "content": ""}]
+                    "elements": [{"tag": "markdown", "content": " "}]
                 }
             ]
         }
@@ -867,7 +867,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
         rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
-        title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
+        title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇ̣tᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
@@ -966,7 +966,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ GIẢM KÍCH THƯỚC BANNER XUỐNG 1/2 VÀ CĂN GIỮA)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ CẬP NHẬT BANNER 1/2 VÀ TỰ ĐỘNG CĂN GIỮA)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
