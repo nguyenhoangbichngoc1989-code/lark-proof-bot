@@ -96,7 +96,7 @@ client = lark.Client.builder() \
     .log_level(lark.LogLevel.INFO) \
     .build()
 
-# ----------------- 3. QUẢN LÝ LỊCH SỬ & TÍNH DUNG LƯỢNG CHUẨN XÁC -----------------
+# ----------------- 3. QUẢN LÝ LỊCH SỬ & TÍNH DUNG LƯỢNG -----------------
 def load_history() -> dict:
     if os.path.exists(HISTORY_FILE):
         try:
@@ -167,13 +167,48 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- TỰ ĐỘNG NHẬN DIỆN MAGIC BYTES & GẮN ĐUÔI VIDEO/ẢNH -----------------
+# ----------------- CHUYỂN ĐỔI CHUẨN XÁC WEBM / KHÔNG ĐUÔI SANG MP4 -----------------
+def convert_to_valid_mp4(file_path: str) -> str:
+    """Chuyển đổi thực sự mã hóa WebM / raw video sang MP4 H.264 để xem được trên Lark"""
+    try:
+        dir_name = os.path.dirname(file_path)
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        clean_base = sanitize_filename(base_name)
+        out_path = os.path.join(dir_name, f"{clean_base}.mp4")
+
+        safe_in = os.path.join(dir_name, f"raw_in_{os.path.basename(file_path)}")
+        if not os.path.exists(safe_in):
+            shutil.copy2(file_path, safe_in)
+
+        cmd = [
+            FFMPEG_EXEC, "-y", "-nostdin",
+            "-threads", "2",
+            "-i", safe_in,
+            "-vf", "fps=15,scale='min(480,iw)':-2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
+            "-pix_fmt", "yuv420p",
+            "-an",
+            "-movflags", "+faststart",
+            out_path
+        ]
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        gc.collect()
+
+        if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
+            print(f"🎬 Đã chuyển đổi WebM sang MP4 chuẩn Lark: {os.path.basename(out_path)}")
+            try:
+                if os.path.exists(file_path) and file_path != out_path:
+                    os.remove(file_path)
+                if os.path.exists(safe_in):
+                    os.remove(safe_in)
+            except Exception:
+                pass
+            return out_path
+    except Exception as e:
+        print(f"Lỗi chuyển sang MP4: {e}")
+    return file_path
+
 def auto_detect_and_fix_extension(file_path: str) -> str:
-    """
-    Kiểm tra phần đầu nhị phân (magic bytes) của file.
-    Nếu là video (hoặc file rc-upload, khui...) nhưng thiếu đuôi -> tự động đổi sang .mp4
-    Nếu là ảnh nhưng thiếu đuôi -> tự động đổi sang .jpg
-    """
     try:
         dir_name = os.path.dirname(file_path)
         base_name = os.path.basename(file_path)
@@ -181,52 +216,55 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
         ext = ext.lower()
 
         is_video = False
+        is_webm = False
         is_image = False
 
         if os.path.exists(file_path) and os.path.getsize(file_path) > 32:
             with open(file_path, "rb") as f:
                 header = f.read(128)
 
-            # Dấu hiệu nhận dạng Video MP4 / QuickTime MOV / Matroska / AVI
-            if b"ftyp" in header[:32] or b"moov" in header[:64] or b"mdat" in header[:64]:
+            # Nhận dạng WebM (EBML header)
+            if header.startswith(b"\x1a\x45\xdf\xa3"):
                 is_video = True
-            elif header.startswith(b"\x1a\x45\xdf\xa3") or (header.startswith(b"RIFF") and b"AVI " in header[8:16]):
+                is_webm = True
+            # Nhận dạng MP4 / QuickTime MOV / Matroska / AVI
+            elif b"ftyp" in header[:32] or b"moov" in header[:64] or b"mdat" in header[:64]:
                 is_video = True
-            elif header.startswith(b"FLV"):
+            elif (header.startswith(b"RIFF") and b"AVI " in header[8:16]) or header.startswith(b"FLV"):
                 is_video = True
 
-            # Dấu hiệu nhận dạng Ảnh JPG / PNG / GIF / WEBP
-            elif header.startswith(b"\xff\xd8\xff"):
-                is_image = True
-            elif header.startswith(b"\x89PNG\r\n\x1a\n") or header.startswith(b"GIF8"):
+            # Nhận dạng Ảnh
+            elif header.startswith(b"\xff\xd8\xff") or header.startswith(b"\x89PNG\r\n\x1a\n") or header.startswith(b"GIF8"):
                 is_image = True
             elif header.startswith(b"RIFF") and b"WEBP" in header[8:16]:
                 is_image = True
 
-        # Nhận diện theo tên và dung lượng đặc trưng
         fname_low = base_name.lower()
-        if not is_video and not is_image:
-            if any(k in fname_low for k in ["rc-upload", "video", "khui", "quay", "clip", "cam", "pack"]):
-                is_video = True
-            elif os.path.getsize(file_path) > 2 * 1024 * 1024 and ext not in [".zip", ".rar", ".pdf", ".docx", ".xlsx"]:
-                is_video = True
+        if any(k in fname_low for k in ["rc-upload", "video", "khui", "quay", "clip", "cam", "pack"]):
+            is_video = True
+        if ext == ".webm" or "webm" in fname_low:
+            is_webm = True
 
-        # Đổi tên tệp nếu thiếu đuôi chuẩn
-        if is_video and ext not in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
+        # Nếu là WebM (từ aliyuncs, rc-upload hoặc có đuôi .webm), bắt buộc chuyển đổi sang .mp4 chuẩn
+        if is_webm or (is_video and ext in [".webm", ""]):
+            return convert_to_valid_mp4(file_path)
+
+        # Đổi tên tệp video thiếu đuôi
+        if is_video and ext not in [".mp4", ".mov", ".avi", ".mkv"]:
             new_file_name = f"{name}.mp4"
             new_path = os.path.join(dir_name, new_file_name)
             os.rename(file_path, new_path)
-            print(f"🎬 Đã tự động nhận diện và gắn đuôi video: {new_file_name}")
             return new_path
-        elif is_image and ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic"]:
+
+        # Đổi tên ảnh thiếu đuôi
+        if is_image and ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic"]:
             new_file_name = f"{name}.jpg"
             new_path = os.path.join(dir_name, new_file_name)
             os.rename(file_path, new_path)
-            print(f"🖼️ Đã tự động nhận diện và gắn đuôi ảnh: {new_file_name}")
             return new_path
 
     except Exception as e:
-        print(f"Lỗi kiểm tra magic bytes: {e}")
+        print(f"Lỗi kiểm tra tệp: {e}")
     return file_path
 
 # ----------------- CƠ CHẾ THẢ VÀ GỠ REACTION -----------------
@@ -272,6 +310,7 @@ def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         ext = os.path.splitext(video_path)[1].lower()
 
+        # Nếu đã là mp4 và nhẹ dưới 25MB thì gửi luôn
         if ext == ".mp4" and size_mb <= 25.0:
             return video_path
 
@@ -359,7 +398,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
                             actual_sent_count += 1
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video (bao gồm cả file rc-upload đã được gắn .mp4)
+            # 2. Tệp Video (bao gồm cả file rc-upload/WebM đã chuyển sang .mp4)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = compress_and_convert_video(file_path, original_name=file_name)
                 size_mb = os.path.getsize(send_path) / (1024 * 1024)
@@ -396,9 +435,13 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list) -> int:
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK THÔNG MINH -----------------
+# ----------------- 5. GIẢI MÃ LINK THÔNG MINH (HỖ TRỢ ALIYUNCS, OSS, BYVN) -----------------
 def resolve_proof_url(url: str) -> str:
-    if any(ext in url.lower() for ext in [".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm"]):
+    # Bỏ qua ngay lập tức đối với link tải trực tiếp (Alibaba OSS, CDN, media files)
+    if any(k in url.lower() for k in [
+        ".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm", ".avi", ".mkv",
+        "aliyuncs.com", "oss-", "rc-upload", "tiktokcdn.com", "byteoversea.com", "fptcloud.com"
+    ]):
         return url
 
     headers = {
@@ -411,11 +454,11 @@ def resolve_proof_url(url: str) -> str:
     if "byvn.net" in cur_url:
         try:
             r_byvn = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=12, verify=False)
-            if r_byvn.url != cur_url and ("drive.google.com" in r_byvn.url or "sharepoint" in r_byvn.url):
+            if r_byvn.url != cur_url and ("drive.google.com" in r_byvn.url or "sharepoint" in r_byvn.url or "aliyuncs.com" in r_byvn.url):
                 return r_byvn.url
 
             html = r_byvn.text
-            found = re.findall(r'(https?://(?:drive\.google\.com|[^"\'\s<>]+\.sharepoint\.com)[^"\'\s<>]*)', html)
+            found = re.findall(r'(https?://(?:drive\.google\.com|[^"\'\s<>]+\.sharepoint\.com|[^"\'\s<>]+\.aliyuncs\.com)[^"\'\s<>]*)', html)
             if found:
                 return found[0].replace("&amp;", "&")
 
@@ -445,7 +488,7 @@ def resolve_proof_url(url: str) -> str:
             r = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
             if r.url != cur_url:
                 cur_url = r.url
-            if any(k in cur_url for k in ["drive.google.com", "sharepoint.com", ".mp4", ".mov", ".png", ".jpg"]):
+            if any(k in cur_url for k in ["drive.google.com", "sharepoint.com", "aliyuncs.com", ".mp4", ".mov", ".png", ".jpg"]):
                 return cur_url
 
             meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', r.text, re.IGNORECASE)
@@ -566,7 +609,7 @@ def download_proof(url: str, target_dir: str) -> bool:
 
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept": "*/*"
         }
         res = global_session.get(final_url, headers=headers, stream=True, timeout=90, verify=False)
@@ -585,7 +628,12 @@ def download_proof(url: str, target_dir: str) -> bool:
                 except Exception:
                     extracted_name = fn_match.group(1)
 
-        raw_name = extracted_name or os.path.basename(urllib.parse.urlparse(final_url).path) or "downloaded_file.mp4"
+        raw_name = extracted_name or os.path.basename(urllib.parse.urlparse(final_url).path) or "downloaded_file"
+
+        # Nếu link Alibaba OSS / rc-upload mà chưa có đuôi, tự động gắn .webm để sau đó chuyển đổi sang .mp4
+        if ("webm" in content_type or "rc-upload" in raw_name.lower() or "aliyuncs.com" in final_url) and "." not in raw_name:
+            raw_name = f"{raw_name}.webm"
+
         save_name = sanitize_filename(raw_name)
         save_path = os.path.join(target_dir, save_name)
 
@@ -661,7 +709,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             print(f"⏳ Đang tải link: {u}")
             download_proof(u, task_temp_dir)
 
-        # Quét và tự động gắn đuôi file theo magic bytes trước khi đưa vào thống kê
+        # Quét và tự động chuyển đổi WebM / aliyuncs sang MP4 trước khi thống kê
         final_files = []
         for root, _, fs in os.walk(task_temp_dir):
             for f in fs:
@@ -727,9 +775,9 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         indent_steps = [
             "  ",
-            "                ",
-            "                               ",
-            "                                             "
+            "           ",
+            "                      ",
+            "                                  "
         ]
 
         group_lines = [f"🗂️: {file_count} file"]
@@ -861,7 +909,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (TỰ ĐỘNG BẬT VIDEO PLAYER CHO RC-UPLOAD & TỰ THÊM .MP4)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TỰ ĐỘNG CHUYỂN ALIBABA OSS / WEBM SANG MP4 NATIVE)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
