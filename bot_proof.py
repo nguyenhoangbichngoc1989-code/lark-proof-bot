@@ -123,7 +123,7 @@ def build_half_size_banner(img_key: str, alt_text: str = "Banner") -> list:
                 {
                     "tag": "column",
                     "width": "weighted",
-                    "weight": 2,  # Đúng 2/4 = 50% (1/2) bề ngang thẻ
+                    "weight": 2,  # Chiếm chính xác 2/4 = 50% (1/2) bề ngang thẻ
                     "elements": [
                         {
                             "tag": "img",
@@ -834,21 +834,19 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
+        # ---------------- THẺ 1: ĐÃ LOẠI BỎ CHỮ CHÀO & THANH LOADING 80% ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
         files_str = "\n".join(file_lines)
 
+        # Đã loại bỏ dòng chữ chào ở trên và thanh loading 80% ở dưới
         header_block = (
-            f"*<font color='turquoise'>          ≽^•⩊•^≼  </font>*\n"
-            f"*<font color='turquoise'> ✧; Ｗｅｌｃｏｍｅ ;✧</font>*\n\n"
             f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
             f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
             f"         ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
             f"{summary_group_str}\n\n"
-            f"{files_str}\n\n"
-            f"⌛*<text_tag color='yellow'>Ｌｏａｄｉｎｇ．．．███████▒▒▒ 8O %</text_tag>*"
+            f"{files_str}"
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "Banner Loading")
@@ -865,9 +863,8 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- BUNG TỆP VÀO THREAD ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
-        rabbit_side_md = "<font color='turquoise'>-ˋ (\\ (\\    .\n.(„• ֊ •„)\n─‌∪─‌∪࿎࿎</font>"
-        title_side_md = "        <text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇ̣tᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
+        # ---------------- THẺ 2 (HOÀN TẤT): ĐÃ BỎ BÉ THỎ & CĂN GIỮA TIÊU ĐỀ ----------------
+        title_side_md = "<text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
@@ -875,16 +872,13 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Banner Completed")
 
+        # Đã bỏ bé thỏ, đưa title_side_md ra giữa thẻ
         finish_card_payload = {
             "elements": card2_img_element + [
                 {
-                    "tag": "column_set",
-                    "flex_mode": "none",
-                    "background_style": "default",
-                    "columns": [
-                        {"tag": "column", "width": "auto", "elements": [{"tag": "markdown", "content": rabbit_side_md}]},
-                        {"tag": "column", "width": "weighted", "weight": 1, "elements": [{"tag": "markdown", "content": title_side_md}]}
-                    ]
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": title_side_md},
+                    "text_align": "center"
                 },
                 {"tag": "markdown", "content": heading_md},
                 {
@@ -966,7 +960,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ CẬP NHẬT BANNER 1/2 VÀ TỰ ĐỘNG CĂN GIỮA)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TINH GỌN GIAO DIỆN THEO YÊU CẦU)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
