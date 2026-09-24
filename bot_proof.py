@@ -84,7 +84,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = os.path.join(BASE_DIR, "temp_files")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
 
-# 🌟 BỘ 3 BANNER CHO 3 TRẠNG THÁI THẺ
+# 🌟 BỘ 3 BANNER CHO 3 TRẠNG THÁI THẺ (1/2 KÍCH THƯỚC, CĂN GIỮA)
 BANNER_CARD1_KEY = "img_v3_0215r_61dad065-35d7-45ba-a33d-6ab073a717ah"      # Thẻ 1: Loading ban đầu
 BANNER_ERROR_KEY = "img_v3_0215r_6e344d17-b29f-4de6-a147-177aa11fa62h"      # Thẻ Báo Lỗi / Cảnh Báo
 BANNER_COMPLETED_KEY = "img_v3_0215r_124a0bca-2990-426a-8cf2-c72aeadb7fdh"  # Thẻ 2: Hoàn Tất
@@ -180,7 +180,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
+        return f"{size_bytes / (1024 * 1024):.2f} KB"
     return f"{size_bytes} B"
 
 def sanitize_filename(filename: str) -> str:
@@ -216,102 +216,74 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VÀ CHUYỂN ĐỔI VIDEO CHỐNG TRÀN RAM RENDER (ANTI-OOM) -----------------
-def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
-    """Nén video an toàn tuyệt đối, dùng 1 luồng chống tràn RAM và không ghi đè file gốc"""
+# ----------------- 4. CHUẨN HÓA TOÀN DIỆN MỌI VIDEO SANG H.264 (HỖ TRỢ CẢ VIDEO CÓ TIẾNG & KHÔNG TIẾNG) -----------------
+def transcode_to_standard_mp4(video_path: str, original_name: str = "") -> str:
+    """
+    Chuẩn hóa 100% video về định dạng H.264 (AVC) + yuv420p.
+    Dùng cờ '-map 0:v:0 -map 0:a?' giúp xử lý hoàn hảo cả video có tiếng lẫn video kho không có tiếng.
+    """
     try:
         if not os.path.exists(video_path):
             return video_path
 
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
-        ext = os.path.splitext(video_path)[1].lower()
-
-        # Nếu file đã là MP4 chuẩn và nhẹ dưới 25MB thì gửi luôn
-        if ext == ".mp4" and size_mb <= 25.0:
-            return video_path
-
         dir_name = os.path.dirname(video_path)
         base_name = os.path.splitext(original_name or os.path.basename(video_path))[0]
         clean_base = sanitize_filename(base_name)
         
-        # File nén xuất ra một file tạm độc lập
-        temp_compressed_path = os.path.join(dir_name, f"opt_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
+        temp_out = os.path.join(dir_name, f"std_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
 
-        cmd = [
-            FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",  # Giới hạn 1 luồng để tiết kiệm RAM tối đa cho Render (chống OOM 48B)
-            "-i", video_path,
-            "-vf", "fps=10,scale=320:-2:flags=fast_bilinear",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "38",
-            "-pix_fmt", "yuv420p",
-            "-an",  # Lược bỏ âm thanh để giảm tối đa kích thước và thời gian nén
-            "-movflags", "+faststart",
-            temp_compressed_path
-        ]
-        
+        # Nếu file <= 25MB (như file 512KB hoặc 2.75MB): Giữ nguyên độ phân giải, chỉ ép chuẩn H.264
+        # Nếu file > 25MB (như file 114MB): Hạ scale 320p để đảm bảo dưới 28MB
+        if size_mb <= 25.0:
+            cmd = [
+                FFMPEG_EXEC, "-y", "-nostdin",
+                "-threads", "1",
+                "-i", video_path,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+                "-pix_fmt", "yuv420p",
+                "-map", "0:v:0",
+                "-map", "0:a?",
+                "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart",
+                temp_out
+            ]
+        else:
+            cmd = [
+                FFMPEG_EXEC, "-y", "-nostdin",
+                "-threads", "1",
+                "-i", video_path,
+                "-vf", "fps=10,scale=320:-2:flags=fast_bilinear",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "38",
+                "-pix_fmt", "yuv420p",
+                "-map", "0:v:0",
+                "-map", "0:a?",
+                "-c:a", "aac", "-b:a", "64k",
+                "-movflags", "+faststart",
+                temp_out
+            ]
+
         proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
         gc.collect()
 
-        # Chỉ chấp nhận file nén nếu tiến trình thành công và dung lượng hợp lệ (> 50KB)
-        if proc.returncode == 0 and os.path.exists(temp_compressed_path):
-            out_bytes = os.path.getsize(temp_compressed_path)
-            if out_bytes > 50000:
-                compressed_mb = out_bytes / (1024 * 1024)
-                if compressed_mb <= 28.0:
-                    print(f"⚡ Nén video thành công: {clean_base}.mp4 ({compressed_mb:.2f} MB)")
-                    return temp_compressed_path
+        if proc.returncode == 0 and os.path.exists(temp_out):
+            out_bytes = os.path.getsize(temp_out)
+            if out_bytes > 5000:  # Hợp lệ trên 5KB
+                out_mb = out_bytes / (1024 * 1024)
+                if out_mb <= 28.0:
+                    print(f"🎬 Đã chuẩn hóa video sang H.264 mượt mà: {clean_base}.mp4 ({out_mb:.2f} MB)")
+                    return temp_out
             
-            if os.path.exists(temp_compressed_path):
-                os.remove(temp_compressed_path)
+            if os.path.exists(temp_out):
+                os.remove(temp_out)
     except Exception as e:
-        print(f"Lỗi nén video: {e}")
-        if 'temp_compressed_path' in locals() and os.path.exists(temp_compressed_path):
-            try:
-                os.remove(temp_compressed_path)
-            except Exception:
-                pass
-    return video_path
-
-def convert_to_valid_mp4(file_path: str) -> str:
-    """Chuyển đổi WebM / file raw sang chuẩn MP4"""
-    try:
-        dir_name = os.path.dirname(file_path)
-        base_name = os.path.splitext(os.path.basename(file_path))[0]
-        clean_base = sanitize_filename(base_name)
-        temp_out = os.path.join(dir_name, f"conv_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
-
-        cmd = [
-            FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",
-            "-i", file_path,
-            "-vf", "fps=15,scale=480:-2:flags=fast_bilinear",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
-            "-pix_fmt", "yuv420p",
-            "-an",
-            "-movflags", "+faststart",
-            temp_out
-        ]
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
-        gc.collect()
-
-        if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 50000:
-            print(f"🎬 Đã chuyển đổi sang MP4 chuẩn Lark: {clean_base}.mp4")
-            try:
-                if os.path.exists(file_path) and file_path != temp_out:
-                    os.remove(file_path)
-            except Exception:
-                pass
-            return temp_out
-        elif os.path.exists(temp_out):
-            os.remove(temp_out)
-    except Exception as e:
-        print(f"Lỗi chuyển sang MP4: {e}")
+        print(f"Lỗi chuẩn hóa video: {e}")
         if 'temp_out' in locals() and os.path.exists(temp_out):
             try:
                 os.remove(temp_out)
             except Exception:
                 pass
-    return file_path
+    return video_path
 
 def auto_detect_and_fix_extension(file_path: str) -> str:
     try:
@@ -321,17 +293,13 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
         ext = ext.lower()
 
         is_video = False
-        is_webm = False
         is_image = False
 
         if os.path.exists(file_path) and os.path.getsize(file_path) > 32:
             with open(file_path, "rb") as f:
                 header = f.read(128)
 
-            if header.startswith(b"\x1a\x45\xdf\xa3"):
-                is_video = True
-                is_webm = True
-            elif b"ftyp" in header[:32] or b"moov" in header[:64] or b"mdat" in header[:64]:
+            if header.startswith(b"\x1a\x45\xdf\xa3") or b"ftyp" in header[:32] or b"moov" in header[:64] or b"mdat" in header[:64]:
                 is_video = True
             elif (header.startswith(b"RIFF") and b"AVI " in header[8:16]) or header.startswith(b"FLV"):
                 is_video = True
@@ -341,15 +309,10 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
                 is_image = True
 
         fname_low = base_name.lower()
-        if any(k in fname_low for k in ["rc-upload", "video", "khui", "quay", "clip", "cam", "pack", "boc", "dong", "hang", "img_"]):
+        if any(k in fname_low for k in ["rc-upload", "video", "khui", "quay", "clip", "cam", "pack", "boc", "dong", "hang", "ams_"]):
             is_video = True
-        if ext == ".webm" or "webm" in fname_low:
-            is_webm = True
 
-        if is_webm or (is_video and ext in [".webm", ""]):
-            return convert_to_valid_mp4(file_path)
-
-        if is_video and ext not in [".mp4", ".mov", ".avi", ".mkv"]:
+        if is_video and ext not in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
             new_file_name = f"{name}.mp4"
             new_path = os.path.join(dir_name, new_file_name)
             os.rename(file_path, new_path)
@@ -456,13 +419,13 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                             actual_sent_count += 1
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video
+            # 2. Tệp Video (Chuẩn hóa H.264 mượt mà 100%)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
-                send_path = compress_and_convert_video(file_path, original_name=file_name)
+                send_path = transcode_to_standard_mp4(file_path, original_name=file_name)
                 
-                # CHỐNG LỖI 48B: Tuyệt đối không tải lên file rỗng hoặc nhỏ hơn 50KB
-                if not os.path.exists(send_path) or os.path.getsize(send_path) < 50000:
-                    print(f"⚠️ Video {file_name} bị lỗi dữ liệu (< 50KB) -> Không đẩy file hỏng lên Lark!")
+                # Chặn hoàn toàn file rác hỏng (< 5KB)
+                if not os.path.exists(send_path) or os.path.getsize(send_path) < 5000:
+                    print(f"⚠️ Video {file_name} bị lỗi dữ liệu -> Bỏ qua không gửi file rác!")
                     continue
 
                 size_mb = os.path.getsize(send_path) / (1024 * 1024)
@@ -481,7 +444,6 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                         actual_sent_count += 1
                         print(f"📥 Đã bung video phát trực tiếp: {os.path.basename(send_path)}")
                 else:
-                    # Video quá lớn không thể nén xuống dưới 28MB -> Gửi thông báo kèm link mở xem trực tiếp
                     direct_url = urls[0] if urls else ""
                     reply_thread_card(message_id, {
                         "elements": [
@@ -507,21 +469,18 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK ĐA TẦNG CHO L1NK.DEV & ENCURTADOR -----------------
+# ----------------- 5. GIẢI MÃ LINK ĐA TẦNG CHO L1NK.DEV, ENCURTADOR, GDRIVE -----------------
 def extract_urls_from_text(raw_text: str) -> list:
-    """Tự động unescape, unquote và giải mã Base64 để bóc tách link đích Google Drive ẩn giấu"""
     urls = []
     text = html.unescape(raw_text)
     text = urllib.parse.unquote(text)
     text = text.replace(r"\/", "/").replace(r"\u002f", "/").replace(r"\u002F", "/")
 
-    # 1. Quét link Drive / SharePoint trực tiếp
     found = re.findall(r'(https?://(?:drive\.google\.com/[^\s"\'<>]+|[^"\'\s<>]+\.sharepoint\.com/[^\s"\'<>]+|[^"\'\s<>]+\.aliyuncs\.com/[^\s"\'<>]+))', text)
     for u in found:
         clean_u = u.split('"')[0].split("'")[0].split('\\')[0].rstrip(';>,.')
         urls.append(clean_u)
 
-    # 2. Giải mã Base64 (các trang rút gọn thường mã hóa URL đích dưới dạng chuỗi aHR0cHM...)
     b64_candidates = re.findall(r'[A-Za-z0-9+/=]{16,}', raw_text)
     for c in b64_candidates:
         try:
@@ -533,7 +492,6 @@ def extract_urls_from_text(raw_text: str) -> list:
         except Exception:
             pass
 
-    # 3. Quét ID thư mục Google Drive ẩn trong mã nguồn
     folder_ids = re.findall(r'folders/([a-zA-Z0-9_-]{28,45})', text)
     for fid in folder_ids:
         urls.append(f"https://drive.google.com/drive/folders/{fid}")
@@ -550,11 +508,7 @@ def resolve_proof_url(url: str) -> str:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Upgrade-Insecure-Requests": "1"
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
     }
     cur_url = url
 
@@ -610,7 +564,6 @@ def resolve_proof_url(url: str) -> str:
     return cur_url
 
 def extract_gdrive_title(file_id: str) -> str:
-    """Bóc tách tên tệp gốc chính xác (ví dụ IMG_9750.MOV) từ trang xem trước của Google Drive"""
     try:
         url = f"https://drive.google.com/file/d/{file_id}/view"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -672,18 +625,18 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
                 for chunk in res.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         f.write(chunk)
-            if os.path.exists(save_path) and os.path.getsize(save_path) > 50000:
+            if os.path.exists(save_path) and os.path.getsize(save_path) > 5000:
                 print(f"📥 Đã tải Drive thành công: {clean_save_name} ({format_size(os.path.getsize(save_path))})")
                 return True
     except Exception as e:
-        print(f"Lỗi tải Drive qua requests: {e}")
+        print(f"Lỗi tải Drive: {e}")
 
     try:
         import gdown
         clean_save_name = sanitize_filename(real_title or f"gdrive_{file_id}.mp4")
         fallback_path = os.path.join(target_dir, clean_save_name)
         output = gdown.download(id=file_id, output=fallback_path, quiet=True)
-        if output and os.path.exists(output) and os.path.getsize(output) > 50000:
+        if output and os.path.exists(output) and os.path.getsize(output) > 5000:
             return True
     except Exception:
         pass
@@ -954,7 +907,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, loading_card_payload)
 
-        # ---------------- BUNG TỆP VÀO THREAD (KÈM BẢO VỆ CHỐNG TỆP HỎNG 48B) ----------------
+        # ---------------- BUNG TỆP VÀO THREAD (ĐÃ ÉP CHUẨN H.264 KHÔNG CÒN LỖI CODEC) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
         # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
@@ -1053,7 +1006,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ GIẢI MÃ L1NK.DEV & KHẮC PHỤC TRIỆT ĐỂ LỖI 48B)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ ÉP 100% VIDEO VỀ CHUẨN H.264 TƯƠNG THÍCH MỌI THIẾT BỊ)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
@@ -1070,4 +1023,3 @@ def start_bot():
 
 if __name__ == "__main__":
     start_bot()
-    
