@@ -180,7 +180,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def sanitize_filename(filename: str) -> str:
@@ -216,12 +216,8 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- 4. CHUẨN HÓA TOÀN DIỆN MỌI VIDEO SANG H.264 (HỖ TRỢ CẢ VIDEO CÓ TIẾNG & KHÔNG TIẾNG) -----------------
+# ----------------- 4. CHUẨN HÓA 100% VIDEO SANG H.264 (HỖ TRỢ CẢ VIDEO CÓ TIẾNG & KHÔNG TIẾNG) -----------------
 def transcode_to_standard_mp4(video_path: str, original_name: str = "") -> str:
-    """
-    Chuẩn hóa 100% video về định dạng H.264 (AVC) + yuv420p.
-    Dùng cờ '-map 0:v:0 -map 0:a?' giúp xử lý hoàn hảo cả video có tiếng lẫn video kho không có tiếng.
-    """
     try:
         if not os.path.exists(video_path):
             return video_path
@@ -233,8 +229,6 @@ def transcode_to_standard_mp4(video_path: str, original_name: str = "") -> str:
         
         temp_out = os.path.join(dir_name, f"std_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
 
-        # Nếu file <= 25MB (như file 512KB hoặc 2.75MB): Giữ nguyên độ phân giải, chỉ ép chuẩn H.264
-        # Nếu file > 25MB (như file 114MB): Hạ scale 320p để đảm bảo dưới 28MB
         if size_mb <= 25.0:
             cmd = [
                 FFMPEG_EXEC, "-y", "-nostdin",
@@ -268,7 +262,7 @@ def transcode_to_standard_mp4(video_path: str, original_name: str = "") -> str:
 
         if proc.returncode == 0 and os.path.exists(temp_out):
             out_bytes = os.path.getsize(temp_out)
-            if out_bytes > 5000:  # Hợp lệ trên 5KB
+            if out_bytes > 5000:
                 out_mb = out_bytes / (1024 * 1024)
                 if out_mb <= 28.0:
                     print(f"🎬 Đã chuẩn hóa video sang H.264 mượt mà: {clean_base}.mp4 ({out_mb:.2f} MB)")
@@ -328,43 +322,6 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
         print(f"Lỗi kiểm tra tệp: {e}")
     return file_path
 
-# ----------------- CƠ CHẾ THẢ VÀ GỠ REACTION -----------------
-def add_reaction_to_message(message_id: str, emoji_type: str) -> str:
-    token = get_tenant_access_token()
-    if not token or not message_id:
-        return ""
-
-    url = f"{TARGET_DOMAIN}/open-apis/im/v1/messages/{message_id}/reactions"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json; charset=utf-8"
-    }
-    data = {"reaction_type": {"emoji_type": emoji_type}}
-    try:
-        res = global_session.post(url, headers=headers, json=data, timeout=10)
-        if res.status_code == 200:
-            body = res.json()
-            rx_id = body.get("data", {}).get("reaction_id", "")
-            print(f"✨ Auto reaction [{emoji_type}] vào message_id: {message_id}")
-            return rx_id
-    except Exception as e:
-        print(f"Lỗi gọi API reaction: {e}")
-    return ""
-
-def remove_reaction_from_message(message_id: str, reaction_id: str):
-    token = get_tenant_access_token()
-    if not token or not message_id or not reaction_id:
-        return
-
-    url = f"{TARGET_DOMAIN}/open-apis/im/v1/messages/{message_id}/reactions/{reaction_id}"
-    headers = {"Authorization": f"Bearer {token}"}
-    try:
-        res = global_session.delete(url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            print(f"⏰ Đã gỡ reaction đồng hồ")
-    except Exception as e:
-        print(f"Lỗi gỡ reaction: {e}")
-
 # ----------------- TẢI LÊN FILE LARK -----------------
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
     if not os.path.exists(file_path):
@@ -423,7 +380,6 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = transcode_to_standard_mp4(file_path, original_name=file_name)
                 
-                # Chặn hoàn toàn file rác hỏng (< 5KB)
                 if not os.path.exists(send_path) or os.path.getsize(send_path) < 5000:
                     print(f"⚠️ Video {file_name} bị lỗi dữ liệu -> Bỏ qua không gửi file rác!")
                     continue
@@ -508,7 +464,11 @@ def resolve_proof_url(url: str) -> str:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Upgrade-Insecure-Requests": "1"
     }
     cur_url = url
 
@@ -780,8 +740,6 @@ def extract_message_text(message: dict) -> str:
 # ----------------- 7. XỬ LÝ CHÍNH & PHẢN HỒI THẺ CHO TỪNG TICKET -----------------
 def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: list, sender_id: str):
     print(f"📥 BẮT ĐẦU XỬ LÝ ĐƠN: {ticket_id} (Tổng link: {len(urls)})")
-    
-    clock_rx_id = add_reaction_to_message(message_id, "AlarmClock")
 
     try:
         req_count = get_current_request_count(ticket_id)
@@ -810,8 +768,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- THẺ BÁO LỖI: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA ----------------
         if not final_files:
             print(f"❌ Không tải được file nào cho đơn {ticket_id}")
-            if clock_rx_id:
-                remove_reaction_from_message(message_id, clock_rx_id)
 
             first_url = urls[0] if urls else ""
             error_img_element = build_half_size_banner(BANNER_ERROR_KEY, "Banner Error")
@@ -882,17 +838,17 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
+        # ---------------- THẺ 1: ĐÃ LOẠI BỎ DÒNG TRỐNG THỪA ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
         files_str = "\n".join(file_lines)
 
+        # Bỏ \n\n thừa, nối trực tiếp summary_group_str và files_str
         header_block = (
             f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-            f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
-            f"         ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
-            f"{summary_group_str}\n\n"
+            f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n\n"
+            f"{summary_group_str}\n"
             f"{files_str}"
         )
 
@@ -938,22 +894,11 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, finish_card_payload)
 
-        # ---------------- 🐍 ĐỔI TỪ ĐỒNG HỒ SANG BÉ RẮN KHI HOÀN TẤT ----------------
-        if clock_rx_id:
-            remove_reaction_from_message(message_id, clock_rx_id)
-
-        if actual_bung_success > 0:
-            add_reaction_to_message(message_id, "KeepYourSpiritsAwake")
-        else:
-            print(f"⚠️ Bung được ({actual_bung_success}/{len(final_files)}) media hợp lệ")
-
         shutil.rmtree(task_temp_dir, ignore_errors=True)
         gc.collect()
 
     except Exception as e:
         print(f"Lỗi trong process_single_task: {e}")
-        if clock_rx_id:
-            remove_reaction_from_message(message_id, clock_rx_id)
 
 def parse_and_dispatch(message_id: str, chat_id: str, text: str, sender_id: str):
     tokens = re.split(r'(\b\d{15,21}\b)', text)
@@ -1006,7 +951,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ ÉP 100% VIDEO VỀ CHUẨN H.264 TƯƠNG THÍCH MỌI THIẾT BỊ)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ BỎ KHOẢNG TRỐNG THỪA TRÊN THẺ 1)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
