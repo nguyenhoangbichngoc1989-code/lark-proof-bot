@@ -216,9 +216,8 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- 4. CHUẨN HÓA TOÀN DIỆN MỌI VIDEO SANG H.264 -----------------
+# ----------------- 4. CHUẨN HÓA 100% VIDEO SANG H.264 (HỖ TRỢ CẢ VIDEO CÓ TIẾNG & KHÔNG TIẾNG) -----------------
 def transcode_to_standard_mp4(video_path: str, original_name: str = "") -> str:
-    """Chuẩn hóa mọi video về H.264 (AVC) + yuv420p, tự động nhận diện video có âm thanh hoặc không âm thanh"""
     try:
         if not os.path.exists(video_path):
             return video_path
@@ -266,7 +265,7 @@ def transcode_to_standard_mp4(video_path: str, original_name: str = "") -> str:
             if out_bytes > 5000:
                 out_mb = out_bytes / (1024 * 1024)
                 if out_mb <= 28.0:
-                    print(f"🎬 Đã chuẩn hóa video sang H.264 mượt mà: {clean_base}.mp4 ({out_mb:.2f} MB)")
+                    print(f"🎬 Đã chuẩn hóa video sang H.264: {clean_base}.mp4 ({out_mb:.2f} MB)")
                     return temp_out
             
             if os.path.exists(temp_out):
@@ -426,44 +425,92 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
 
     return actual_sent_count
 
-# ----------------- 5. BÓC TÁCH L1NK.DEV, ENCURTADOR & QUÉT SÂU THƯ MỤC DRIVE -----------------
-def extract_urls_from_text(raw_text: str) -> list:
-    urls = []
-    text = html.unescape(raw_text)
-    text = urllib.parse.unquote(text)
-    text = text.replace(r"\/", "/").replace(r"\u002f", "/").replace(r"\u002F", "/")
+# ----------------- 5. GIẢI MÃ CHUYÊN SÂU L1NK.DEV & ENCURTADOR.DEV -----------------
+def resolve_encurtador_link(url: str) -> str:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://encurtador.dev/"
+    }
 
-    # 1. Bóc tách link Google Drive trực tiếp
-    found = re.findall(r'(https?://(?:drive\.google\.com/[^\s"\'<>]+|[^"\'\s<>]+\.sharepoint\.com/[^\s"\'<>]+|[^"\'\s<>]+\.aliyuncs\.com/[^\s"\'<>]+))', text)
-    for u in found:
-        clean_u = u.split('"')[0].split("'")[0].split('\\')[0].rstrip(';>,.')
-        urls.append(clean_u)
+    slug = url.rstrip("/").split("/")[-1]
+    
+    # 1. Gọi trực tiếp các API nội bộ của Encurtador
+    api_candidates = [
+        f"https://encurtador.dev/api/link/{slug}",
+        f"https://encurtador.dev/api/links/{slug}",
+        f"https://encurtador.dev/api/redirecionamento/{slug}",
+        f"https://encurtador.dev/api/redirecionamento/l1nk.dev/{slug}",
+        f"https://unshorten.me/json/{url}"
+    ]
 
-    # 2. Giải mã Next.js __NEXT_DATA__
-    next_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', raw_text, re.DOTALL)
-    if next_match:
+    for api_endpoint in api_candidates:
         try:
-            data = json.loads(next_match.group(1))
-            def walk_json(obj):
-                if isinstance(obj, dict):
-                    for v in obj.values():
-                        walk_json(v)
-                elif isinstance(obj, list):
-                    for item in obj:
-                        walk_json(item)
-                elif isinstance(obj, str):
-                    if "drive.google.com" in obj:
-                        urls.append(obj)
-            walk_json(data)
+            r = global_session.get(api_endpoint, headers=headers, timeout=5, verify=False)
+            if r.status_code == 200:
+                txt = r.text
+                found_drives = re.findall(r'https?://(?:drive\.google\.com|sharepoint|aliyuncs)[^\s"\'<>]+', txt.replace(r"\/", "/"))
+                if found_drives:
+                    print(f"🔗 Bóc tách link Drive từ API Encurtador: {found_drives[0]}")
+                    return found_drives[0]
+                try:
+                    data = r.json()
+                    for k in ["destination", "url", "target", "dest", "resolved_url"]:
+                        val = data.get(k) or (data.get("link", {}) if isinstance(data.get("link"), dict) else {}).get(k)
+                        if val and str(val).startswith("http"):
+                            return str(val)
+                except Exception:
+                    pass
         except Exception:
             pass
 
-    # 3. Quét mã ID Google Drive 33 ký tự ẩn trong trang
-    gdrive_ids = re.findall(r'folders/([a-zA-Z0-9_-]{28,45})', text)
-    for fid in gdrive_ids:
-        urls.append(f"https://drive.google.com/drive/folders/{fid}")
+    # 2. Quét nội dung trang bằng requests và curl
+    html_content = ""
+    try:
+        r_page = global_session.get(url, headers=headers, allow_redirects=True, timeout=10, verify=False)
+        if r_page.status_code == 200:
+            html_content = r_page.text
+    except Exception:
+        pass
 
-    return list(set(urls))
+    if not html_content:
+        try:
+            cmd = ["curl", "-sL", "-m", "15", "-A", headers["User-Agent"], url]
+            html_content = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=20).decode('utf-8', errors='ignore')
+        except Exception:
+            pass
+
+    if html_content:
+        clean_html = html_content.replace(r"\/", "/")
+        found_in_html = re.findall(r'(https?://(?:drive\.google\.com/[^\s"\'<>]+|[^"\'\s<>]+\.sharepoint\.com/[^\s"\'<>]+))', clean_html)
+        if found_in_html:
+            return found_in_html[0]
+
+        # Quét Next.js __NEXT_DATA__
+        next_data = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html_content, re.DOTALL)
+        if next_data:
+            found_next = re.findall(r'https?://(?:drive\.google\.com|sharepoint)[^\s"\'<>]+', next_data.group(1).replace(r"\/", "/"))
+            if found_next:
+                return found_next[0]
+
+        # Quét ID Google Drive 33 ký tự ẩn trong trang
+        drive_folder_id = re.search(r'(?:folders/|id=)(1[a-zA-Z0-9_-]{32})', html_content)
+        if drive_folder_id:
+            return f"https://drive.google.com/drive/folders/{drive_folder_id.group(1)}"
+
+        # Quét chuỗi Base64
+        for b in re.findall(r'[A-Za-z0-9+/=]{20,}', html_content):
+            try:
+                dec = base64.b64decode(b + "==").decode('utf-8', errors='ignore')
+                if "drive.google.com" in dec:
+                    m_dec = re.findall(r'https?://drive\.google\.com/[^\s"\'<>]+', dec)
+                    if m_dec:
+                        return m_dec[0]
+            except Exception:
+                pass
+
+    return url
 
 def resolve_proof_url(url: str) -> str:
     if any(k in url.lower() for k in [
@@ -471,6 +518,12 @@ def resolve_proof_url(url: str) -> str:
         "aliyuncs.com", "oss-", "rc-upload", "tiktokcdn.com", "byteoversea.com", "fptcloud.com"
     ]):
         return url
+
+    # Xử lý riêng cho l1nk.dev và encurtador.dev
+    if any(k in url for k in ["l1nk.dev", "encurtador.dev", "acesse.one"]):
+        resolved_encurtador = resolve_encurtador_link(url)
+        if resolved_encurtador != url:
+            return resolved_encurtador
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -493,7 +546,7 @@ def resolve_proof_url(url: str) -> str:
             return f"{cur_url}{sep}download=1"
         return url
 
-    for _ in range(4):
+    for _ in range(3):
         try:
             r = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=12, verify=False)
             if r.url != cur_url:
@@ -502,29 +555,9 @@ def resolve_proof_url(url: str) -> str:
             if any(k in cur_url for k in ["drive.google.com", "sharepoint.com", "aliyuncs.com", ".mp4", ".mov", ".png", ".jpg"]):
                 return cur_url
 
-            found_urls = extract_urls_from_text(r.text)
+            found_urls = re.findall(r'(https?://(?:drive\.google\.com/[^\s"\'<>]+|[^"\'\s<>]+\.sharepoint\.com/[^\s"\'<>]+))', r.text.replace(r"\/", "/"))
             for cand in found_urls:
-                if any(k in cand for k in ["drive.google.com", "sharepoint", "aliyuncs"]):
-                    print(f"🔗 Bóc tách thành công link đích ẩn: {cand}")
-                    return cand
-
-            dest_btn = re.search(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(?:[\s\S]*?(?:Go to destination|Chuyển tiếp|Download))', r.text, re.IGNORECASE)
-            if dest_btn:
-                btn_url = dest_btn.group(1)
-                if btn_url.startswith("http"):
-                    return btn_url
-
-            meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', r.text, re.IGNORECASE)
-            if meta_match:
-                cur_url = urllib.parse.urljoin(cur_url, meta_match.group(1))
-                continue
-
-            js_match = re.search(r'(?:window\.location(?:\.href)?|location\.replace)\s*=\s*["\']([^"\']+)["\']', r.text)
-            if js_match:
-                js_dest = js_match.group(1)
-                if js_dest.startswith("http"):
-                    cur_url = js_dest
-                    continue
+                return cand
             break
         except Exception:
             break
@@ -612,60 +645,64 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     return False
 
 def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
-    """Tải thư mục Google Drive qua Embedded View và quét ID sâu chống chặn 100%"""
+    """Tải toàn diện thư mục Google Drive bằng yt-dlp, gdown CLI và quét API"""
     folder_match = re.search(r'/folders/([a-zA-Z0-9_-]+)', folder_url)
     folder_id = folder_match.group(1) if folder_match else ""
     if not folder_id:
         return False
 
-    found_files = {}
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    clean_url = f"https://drive.google.com/drive/folders/{folder_id}"
+    print(f"📂 Đang tiến hành tải thư mục Google Drive: {clean_url}")
 
-    # Cách 1: Quét qua giao diện nhúng tĩnh Google Drive Embedded View (Rất ổn định)
+    # 1. Thử dùng yt-dlp (Tải mượt mà toàn bộ video từ thư mục công khai)
     try:
-        embed_url = f"https://drive.google.com/embeddedfolderview?id={folder_id}#list"
-        r_embed = global_session.get(embed_url, headers=headers, timeout=15, verify=False)
-        if r_embed.status_code == 200:
-            html_text = r_embed.text
-            embed_matches = re.findall(r'href="https://drive\.google\.com/file/d/([a-zA-Z0-9_-]{25,50})/view[^"]*"[^>]*>([^<]+)</a>', html_text)
-            for fid, fname in embed_matches:
-                if fid not in found_files and fid != folder_id:
-                    found_files[fid] = fname.strip()
+        cmd_ytdlp = [
+            "yt-dlp",
+            "--no-warnings",
+            "--no-check-certificates",
+            "-P", target_dir,
+            clean_url
+        ]
+        subprocess.run(cmd_ytdlp, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        file_count = sum(len(files) for _, _, files in os.walk(target_dir))
+        if file_count > 0:
+            print(f"📥 yt-dlp đã tải thành công {file_count} video từ thư mục Drive!")
+            return True
     except Exception as e:
-        print(f"Lỗi embeddedfolderview: {e}")
+        print(f"Lưu ý yt-dlp: {e}")
 
-    # Cách 2: Quét trực tiếp qua trang thư mục Drive chính
-    if not found_files:
-        try:
-            main_url = f"https://drive.google.com/drive/folders/{folder_id}"
-            r_main = global_session.get(main_url, headers=headers, timeout=15, verify=False)
-            if r_main.status_code == 200:
-                html_text = r_main.text
-                cand_ids = set(re.findall(r'["\'](1[a-zA-Z0-9_-]{32})["\']', html_text)) - {folder_id}
-                cand_ids |= set(re.findall(r'\\"(1[a-zA-Z0-9_-]{32})\\"', html_text)) - {folder_id}
-                for fid in cand_ids:
-                    found_files[fid] = ""
-        except Exception as e:
-            print(f"Lỗi quét Drive chính: {e}")
-
-    # Tiến hành tải các file đã bóc tách được
-    if found_files:
-        success_count = 0
-        for fid, fname in found_files.items():
-            if download_single_gdrive_file(fid, target_dir, fname):
-                success_count += 1
-        if success_count > 0:
-            return True
-
-    # Cách 3: Dự phòng qua gdown
+    # 2. Thử dùng gdown CLI
     try:
-        import gdown
-        clean_url = f"https://drive.google.com/drive/folders/{folder_id}"
-        downloaded = gdown.download_folder(clean_url, output=target_dir, quiet=True, use_cookies=False)
-        if downloaded and len(downloaded) > 0:
+        cmd_gdown = [
+            "gdown",
+            "--folder",
+            clean_url,
+            "-O", target_dir,
+            "--remaining-ok"
+        ]
+        subprocess.run(cmd_gdown, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        file_count = sum(len(files) for _, _, files in os.walk(target_dir))
+        if file_count > 0:
+            print(f"📥 gdown CLI đã tải thành công {file_count} file!")
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Lưu ý gdown CLI: {e}")
+
+    # 3. Quét ID file trong HTML
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        r = global_session.get(clean_url, headers=headers, timeout=15, verify=False)
+        if r.status_code == 200:
+            cand_ids = set(re.findall(r'["\'](1[a-zA-Z0-9_-]{32})["\']', r.text)) - {folder_id}
+            cand_ids |= set(re.findall(r'\\"(1[a-zA-Z0-9_-]{32})\\"', r.text)) - {folder_id}
+            success_count = 0
+            for fid in cand_ids:
+                if download_single_gdrive_file(fid, target_dir):
+                    success_count += 1
+            if success_count > 0:
+                return True
+    except Exception as e:
+        print(f"Lưu ý quét web: {e}")
 
     return False
 
@@ -978,7 +1015,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ GIẢI MÃ L1NK.DEV & EMBEDDED DRIVE FOLDER VIEW)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TỰ ĐỘNG BÓC TÁCH L1NK.DEV & TẢI VIDEO THƯ MỤC DRIVE)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
