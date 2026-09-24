@@ -2,6 +2,8 @@ import os
 import re
 import gc
 import json
+import base64
+import html
 import shutil
 import zipfile
 import urllib.parse
@@ -216,7 +218,7 @@ def reply_thread_card(message_id: str, card_content: dict):
 
 # ----------------- NÉN VÀ CHUYỂN ĐỔI VIDEO CHỐNG TRÀN RAM RENDER (ANTI-OOM) -----------------
 def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
-    """Nén video siêu nhẹ (threads=1, scale 320p), tuyệt đối không ghi đè làm hỏng file gốc"""
+    """Nén video an toàn tuyệt đối, dùng 1 luồng chống tràn RAM và không ghi đè file gốc"""
     try:
         if not os.path.exists(video_path):
             return video_path
@@ -237,7 +239,7 @@ def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
 
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",  # Giới hạn 1 luồng để tiết kiệm RAM tối đa cho Render
+            "-threads", "1",  # Giới hạn 1 luồng để tiết kiệm RAM tối đa cho Render (chống OOM 48B)
             "-i", video_path,
             "-vf", "fps=10,scale=320:-2:flags=fast_bilinear",
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "38",
@@ -505,7 +507,39 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK & TẢI GOOGLE DRIVE BẮT TÊN GỐC CHUẨN XÁC -----------------
+# ----------------- 5. GIẢI MÃ LINK ĐA TẦNG CHO L1NK.DEV & ENCURTADOR -----------------
+def extract_urls_from_text(raw_text: str) -> list:
+    """Tự động unescape, unquote và giải mã Base64 để bóc tách link đích Google Drive ẩn giấu"""
+    urls = []
+    text = html.unescape(raw_text)
+    text = urllib.parse.unquote(text)
+    text = text.replace(r"\/", "/").replace(r"\u002f", "/").replace(r"\u002F", "/")
+
+    # 1. Quét link Drive / SharePoint trực tiếp
+    found = re.findall(r'(https?://(?:drive\.google\.com/[^\s"\'<>]+|[^"\'\s<>]+\.sharepoint\.com/[^\s"\'<>]+|[^"\'\s<>]+\.aliyuncs\.com/[^\s"\'<>]+))', text)
+    for u in found:
+        clean_u = u.split('"')[0].split("'")[0].split('\\')[0].rstrip(';>,.')
+        urls.append(clean_u)
+
+    # 2. Giải mã Base64 (các trang rút gọn thường mã hóa URL đích dưới dạng chuỗi aHR0cHM...)
+    b64_candidates = re.findall(r'[A-Za-z0-9+/=]{16,}', raw_text)
+    for c in b64_candidates:
+        try:
+            padded = c + "=" * ((4 - len(c) % 4) % 4)
+            dec = base64.b64decode(padded).decode('utf-8', errors='ignore')
+            if any(k in dec for k in ["drive.google.com", "sharepoint", "aliyuncs", "http"]):
+                dec_urls = re.findall(r'https?://[^\s"\'<>]+', dec)
+                urls.extend(dec_urls)
+        except Exception:
+            pass
+
+    # 3. Quét ID thư mục Google Drive ẩn trong mã nguồn
+    folder_ids = re.findall(r'folders/([a-zA-Z0-9_-]{28,45})', text)
+    for fid in folder_ids:
+        urls.append(f"https://drive.google.com/drive/folders/{fid}")
+
+    return list(set(urls))
+
 def resolve_proof_url(url: str) -> str:
     if any(k in url.lower() for k in [
         ".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm", ".avi", ".mkv",
@@ -514,24 +548,15 @@ def resolve_proof_url(url: str) -> str:
         return url
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Upgrade-Insecure-Requests": "1"
     }
     cur_url = url
-
-    if any(k in cur_url for k in ["l1nk.dev", "encurtador.dev", "acesse.one"]):
-        try:
-            code = cur_url.rstrip("/").split("/")[-1]
-            api_url = f"https://encurtador.dev/api/link/{code}"
-            r_api = global_session.get(api_url, headers=headers, timeout=6, verify=False)
-            if r_api.status_code == 200:
-                data = r_api.json()
-                dest = data.get("link", {}).get("destination") or data.get("destination") or data.get("url")
-                if dest and any(k in dest for k in ["drive.google.com", "sharepoint", "aliyuncs", "http"]):
-                    return dest
-        except Exception:
-            pass
 
     if "stream.aspx" in cur_url and "id=" in cur_url:
         m = re.search(r'id=([^&]+)', cur_url)
@@ -555,23 +580,24 @@ def resolve_proof_url(url: str) -> str:
             if any(k in cur_url for k in ["drive.google.com", "sharepoint.com", "aliyuncs.com", ".mp4", ".mov", ".png", ".jpg"]):
                 return cur_url
 
-            html_text = r.text.replace(r"\/", "/").replace("&amp;", "&")
-            target_match = re.search(r'(https?://(?:drive\.google\.com/[^\s"\'<>]+|[^"\'\s<>]+\.sharepoint\.com/[^\s"\'<>]+|[^"\'\s<>]+\.aliyuncs\.com/[^\s"\'<>]+))', html_text)
-            if target_match:
-                return target_match.group(1)
+            found_urls = extract_urls_from_text(r.text)
+            for cand in found_urls:
+                if any(k in cand for k in ["drive.google.com", "sharepoint", "aliyuncs"]):
+                    print(f"🔗 Bóc tách thành công link đích ẩn: {cand}")
+                    return cand
 
-            dest_btn = re.search(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(?:[\s\S]*?(?:Go to destination|Chuyển tiếp|Download))', html_text, re.IGNORECASE)
+            dest_btn = re.search(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(?:[\s\S]*?(?:Go to destination|Chuyển tiếp|Download))', r.text, re.IGNORECASE)
             if dest_btn:
                 btn_url = dest_btn.group(1)
                 if btn_url.startswith("http"):
                     return btn_url
 
-            meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', html_text, re.IGNORECASE)
+            meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', r.text, re.IGNORECASE)
             if meta_match:
                 cur_url = urllib.parse.urljoin(cur_url, meta_match.group(1))
                 continue
 
-            js_match = re.search(r'(?:window\.location(?:\.href)?|location\.replace)\s*=\s*["\']([^"\']+)["\']', html_text)
+            js_match = re.search(r'(?:window\.location(?:\.href)?|location\.replace)\s*=\s*["\']([^"\']+)["\']', r.text)
             if js_match:
                 js_dest = js_match.group(1)
                 if js_dest.startswith("http"):
@@ -601,8 +627,6 @@ def extract_gdrive_title(file_id: str) -> str:
 
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-
-    # Lấy tên gốc từ tiêu đề Drive (ví dụ IMG_9750.MOV)
     real_title = preferred_name or extract_gdrive_title(file_id)
 
     try:
@@ -617,7 +641,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
         content_type = res.headers.get("Content-Type", "").lower()
         if not confirm_token and "text/html" in content_type:
-            # Bắt tên tệp từ trang cảnh báo vi-rút nếu có
             name_in_warning = re.search(r'([a-zA-Z0-9_\-\. ]+\.(?:mp4|mov|avi|mkv|webm))\s*\(\d+M\)', res.text)
             if name_in_warning and not real_title:
                 real_title = name_in_warning.group(1).strip()
@@ -655,7 +678,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"Lỗi tải Drive qua requests: {e}")
 
-    # Dự phòng gdown cho tệp lớn có xác nhận vi-rút
     try:
         import gdown
         clean_save_name = sanitize_filename(real_title or f"gdrive_{file_id}.mp4")
@@ -685,13 +707,13 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
     try:
         res = global_session.get(clean_url, headers=headers, timeout=15, verify=False)
         if res.status_code == 200:
-            html = res.text
+            html_text = res.text
             found_files = {}
 
-            matches = re.findall(r'\["([a-zA-Z0-9_-]{28,45})",\["([^"]+)"', html)
-            matches += re.findall(r'\["([a-zA-Z0-9_-]{28,45})","([^"]+)"', html)
+            matches = re.findall(r'\["([a-zA-Z0-9_-]{28,45})",\["([^"]+)"', html_text)
+            matches += re.findall(r'\["([a-zA-Z0-9_-]{28,45})","([^"]+)"', html_text)
             for fid, fname in matches:
-                if fid not in found_files and 28 <= len(fid) <= 45:
+                if fid not in found_files and 28 <= len(fid) <= 45 and fid != folder_id:
                     if not fname.startswith("http") and not any(k in fname for k in ["<", ">", "{", "}", ";"]):
                         found_files[fid] = fname
 
@@ -719,7 +741,7 @@ def download_proof(url: str, target_dir: str) -> bool:
 
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "*/*"
         }
         res = global_session.get(final_url, headers=headers, stream=True, timeout=90, verify=False)
@@ -1031,7 +1053,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ SỬA TRIỆT ĐỂ LỖI NÉN TRÀN RAM & BẢO VỆ CHỐNG FILE 48B)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ GIẢI MÃ L1NK.DEV & KHẮC PHỤC TRIỆT ĐỂ LỖI 48B)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
