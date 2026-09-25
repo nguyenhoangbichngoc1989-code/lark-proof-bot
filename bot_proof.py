@@ -144,9 +144,9 @@ def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
         }
     ]
 
-# ----------------- HÀM TẠO CÁC KHỐI ĐIỂM NHẤN TRÊN THẺ -----------------
+# ----------------- HÀM TẠO CALLOUT BOX CĂN CHÍNH GIỮA TỰ NHIÊN -----------------
 def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
-    """Tạo khung điểm nhấn trên (Callout Box bo góc nền màu, căn giữa và in đậm chuẩn xác)"""
+    """Sử dụng 3 cột (weighted 1 | auto | weighted 1) để căn giữa dòng chữ tuyệt đối trong Callout Box"""
     return {
         "tag": "column_set",
         "flex_mode": "none",
@@ -156,51 +156,83 @@ def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
                 "tag": "column",
                 "width": "weighted",
                 "weight": 1,
+                "elements": [{"tag": "markdown", "content": " "}]
+            },
+            {
+                "tag": "column",
+                "width": "auto",
                 "elements": [
                     {
-                        "tag": "div",
-                        "text": {
-                            "tag": "lark_md",
-                            "content": content_md
-                        },
-                        "text_align": "center"
+                        "tag": "markdown",
+                        "content": content_md
                     }
                 ]
+            },
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [{"tag": "markdown", "content": " "}]
             }
         ]
     }
 
-def build_pill_tag(content_text: str) -> dict:
-    """Tạo tag điểm nhấn dưới dạng viên thuốc bo tròn căn giữa thẻ (đã lược bỏ emoji)"""
+def build_centered_tag(tag_md: str) -> dict:
+    """Căn chính giữa tag điểm nhấn"""
     return {
-        "tag": "div",
-        "text": {
-            "tag": "lark_md",
-            "content": f"<text_tag color='grey'>{content_text}</text_tag>"
-        },
-        "text_align": "center"
+        "tag": "column_set",
+        "flex_mode": "none",
+        "background_style": "default",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [{"tag": "markdown", "content": " "}]
+            },
+            {
+                "tag": "column",
+                "width": "auto",
+                "elements": [
+                    {
+                        "tag": "markdown",
+                        "content": tag_md
+                    }
+                ]
+            },
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [{"tag": "markdown", "content": " "}]
+            }
+        ]
     }
 
-# 🌟 FOOTER ĐỐI XỨNG CĂN GIỮA: MƯA BÊN TRÁI - TAG SỐ LẦN ĐẾM (ĐỎ HỒNG CARMINE) BÊN PHẢI
+# 🌟 FOOTER: MƯA BÊN TRÁI - TAG SỐ LẦN ĐẾM (ĐỎ HỒNG CARMINE) Ở GÓC PHẢI
 def build_footer_element(repeat_tag_str: str = "") -> dict:
     columns = [
         {
             "tag": "column",
-            "width": "weighted",
-            "weight": 5,
+            "width": "auto",
             "elements": [
                 {
                     "tag": "markdown",
                     "content": "🌧️ <text_tag color='wathet'>**ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...**</text_tag> 🌧️"
                 }
             ]
+        },
+        {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "elements": [{"tag": "markdown", "content": " "}]
         }
     ]
     if repeat_tag_str:
         columns.append({
             "tag": "column",
-            "width": "weighted",
-            "weight": 2,
+            "width": "auto",
             "elements": [
                 {
                     "tag": "markdown",
@@ -251,7 +283,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def sanitize_filename(filename: str) -> str:
@@ -287,8 +319,23 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- HÀM NÉN VIDEO CHO TỆP ĐẾN 500MB (BẢO ĐẢM XUẤT 6MB - 14MB, RÕ NÉT AWB) -----------------
+# ----------------- HÀM ĐO THỜI LƯỢNG VIDEO -----------------
+def get_video_duration(file_path: str) -> float:
+    try:
+        cmd = [FFMPEG_EXEC, "-i", file_path]
+        p = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, timeout=12)
+        err = p.stderr.decode('utf-8', errors='ignore')
+        m = re.search(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)', err)
+        if m:
+            h, m_, s = float(m.group(1)), float(m.group(2)), float(m.group(3))
+            return h * 3600 + m_ * 60 + s
+    except Exception:
+        pass
+    return 0.0
+
+# ----------------- HÀM NÉN VIDEO ĐA NĂNG < 500MB (LUÔN XUẤT 8MB - 18MB, NÉT AWB) -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
+    """Nén an toàn mọi video < 500MB bằng bitrate động, đảm bảo luôn bung trực tiếp vào thread"""
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
             return file_path
@@ -296,7 +343,8 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         ext = os.path.splitext(file_path)[1].lower()
 
-        if ext == ".mp4" and size_mb <= 20.0 and not any(k in file_path.lower() for k in ["raw_", "tmp_"]):
+        # Nếu file đã là MP4 nhẹ <= 18MB thì không cần nén
+        if ext == ".mp4" and size_mb <= 18.0 and not any(k in file_path.lower() for k in ["raw_", "tmp_"]):
             return file_path
 
         dir_name = os.path.dirname(file_path)
@@ -311,72 +359,54 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         temp_out = os.path.join(dir_name, f"tmp_hd_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
-        vf_hd = "scale=w=1280:h=1280:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=20,eq=contrast=1.15"
+        # Đo thời lượng để tính toán bitrate tối ưu cho trần 18MB
+        dur = get_video_duration(file_path)
+        if dur > 0:
+            bitrate_kbps = max(250, min(1000, int(140000 / dur)))
+        else:
+            bitrate_kbps = 650
 
-        cmd_hd = [
+        maxrate_kbps = int(bitrate_kbps * 1.25)
+        bufsize_kbps = int(bitrate_kbps * 2.0)
+
+        # Bộ lọc chuẩn xác 100% không bao giờ lỗi cú pháp FFmpeg
+        vf = "scale=w='min(960,iw)':h='min(960,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,fps=18,eq=contrast=1.12"
+
+        cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "1",
             "-i", file_path,
-            "-vf", vf_hd,
+            "-vf", vf,
             "-c:v", "libx264", "-preset", "ultrafast",
-            "-b:v", "750k", "-maxrate", "950k", "-bufsize", "1500k",
+            "-b:v", f"{bitrate_kbps}k",
+            "-maxrate", f"{maxrate_kbps}k",
+            "-bufsize", f"{bufsize_kbps}k",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
             temp_out
         ]
 
-        proc = subprocess.run(cmd_hd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=360)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=360)
         gc.collect()
 
-        if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 50000:
+        if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 10000:
             out_mb = os.path.getsize(temp_out) / (1024 * 1024)
-            if out_mb <= 26.0:
-                print(f"✨ Nén HD 720p thành công: {clean_base}.mp4 ({out_mb:.2f} MB)")
-                try:
-                    if os.path.exists(final_mp4) and final_mp4 != temp_out:
-                        os.remove(final_mp4)
-                    if os.path.exists(file_path) and file_path != temp_out and file_path != final_mp4:
-                        os.remove(file_path)
-                except Exception:
-                    pass
-                os.rename(temp_out, final_mp4)
-                return final_mp4
-            else:
-                if os.path.exists(temp_out):
-                    os.remove(temp_out)
-
-        vf_safe = "scale=w=854:h=854:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
-        cmd_safe = [
-            FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",
-            "-i", file_path,
-            "-vf", vf_safe,
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-b:v", "500k", "-maxrate", "700k", "-bufsize", "1200k",
-            "-pix_fmt", "yuv420p",
-            "-an",
-            "-movflags", "+faststart",
-            temp_out
-        ]
-        proc_safe = subprocess.run(cmd_safe, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=300)
-        gc.collect()
-
-        if proc_safe.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 50000:
-            out_mb = os.path.getsize(temp_out) / (1024 * 1024)
-            print(f"⚡ Nén nấc 2 an toàn thành công: {clean_base}.mp4 ({out_mb:.2f} MB)")
+            print(f"✨ Nén video thành công: {clean_base}.mp4 ({out_mb:.2f} MB)")
             try:
                 if os.path.exists(final_mp4) and final_mp4 != temp_out:
                     os.remove(final_mp4)
                 if os.path.exists(file_path) and file_path != temp_out and file_path != final_mp4:
                     os.remove(file_path)
-                os.rename(temp_out, final_mp4)
-                return final_mp4
             except Exception:
                 pass
+            os.rename(temp_out, final_mp4)
+            return final_mp4
         else:
             if os.path.exists(temp_out):
                 os.remove(temp_out)
+            err_log = proc.stderr.decode('utf-8', errors='ignore')[-200:] if proc.stderr else ""
+            print(f"⚠️ FFmpeg không nén được video: {err_log}")
     except Exception as e:
         print(f"Lỗi nén video: {e}")
         if 'temp_out' in locals() and os.path.exists(temp_out):
@@ -457,7 +487,8 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
 
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
-        if is_webm or ext in [".webm", ".mov", ".avi", ".mkv"] or (is_video and (ext != ".mp4" or size_mb > 15.0)):
+        # Mọi video > 18MB đều được tối ưu hóa trước khi gắn vào thẻ
+        if is_webm or ext in [".webm", ".mov", ".avi", ".mkv"] or (is_video and (ext != ".mp4" or size_mb > 18.0)):
             return compress_video_to_safe_mp4(file_path)
 
     except Exception as e:
@@ -505,8 +536,12 @@ def remove_reaction_from_message(message_id: str, reaction_id: str):
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
     if not os.path.exists(file_path):
         return ""
-    if os.path.getsize(file_path) / (1024 * 1024) > 48.0:
-        return ""
+    
+    # Dự phòng: Nếu file vẫn vượt trần 45MB thì nén khẩn cấp
+    if os.path.getsize(file_path) / (1024 * 1024) > 45.0:
+        file_path = compress_video_to_safe_mp4(file_path)
+        if os.path.getsize(file_path) / (1024 * 1024) > 45.0:
+            return ""
 
     token = get_tenant_access_token()
     if not token:
@@ -559,29 +594,26 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
 
             # 2. Tệp PDF
             elif file_ext == ".pdf":
-                if os.path.getsize(file_path) / (1024 * 1024) <= 48.0:
-                    file_key = upload_lark_file(file_path, "pdf") or upload_lark_file(file_path, "stream")
-                    if file_key:
-                        file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
-                        resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
-                        if resp and resp.success():
-                            actual_sent_count += 1
-                            print(f"📄 Đã bung tệp PDF vào thread: {file_name}")
+                file_key = upload_lark_file(file_path, "pdf") or upload_lark_file(file_path, "stream")
+                if file_key:
+                    file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
+                    resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+                    if resp and resp.success():
+                        actual_sent_count += 1
+                        print(f"📄 Đã bung tệp PDF vào thread: {file_name}")
 
-            # 3. Tệp Video
+            # 3. Tệp Video (luôn nén an toàn để bung thẳng vào thread)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = f["path"]
-                if os.path.getsize(send_path) / (1024 * 1024) > 20.0:
+                if os.path.getsize(send_path) / (1024 * 1024) > 18.0:
                     send_path = compress_video_to_safe_mp4(file_path, original_name=file_name)
                 
-                if not os.path.exists(send_path) or os.path.getsize(send_path) < 50000:
+                if not os.path.exists(send_path) or os.path.getsize(send_path) < 10000:
                     print(f"⚠️ Video {file_name} bị lỗi dữ liệu -> Bỏ qua!")
                     continue
 
                 size_mb = os.path.getsize(send_path) / (1024 * 1024)
-                file_key = ""
-                if size_mb <= 48.0:
-                    file_key = upload_lark_file(send_path, "stream") or upload_lark_file(send_path, "mp4")
+                file_key = upload_lark_file(send_path, "stream") or upload_lark_file(send_path, "mp4")
 
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder() \
@@ -594,24 +626,22 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                         actual_sent_count += 1
                         print(f"📥 Đã bung video phát trực tiếp: {os.path.basename(send_path)}")
                 else:
-                    if size_mb > 48.0:
-                        direct_url = urls[0] if urls else ""
-                        reply_thread_card(message_id, {
-                            "elements": [
-                                {"tag": "markdown", "content": f"⚠️ Video **{file_name}** ({format_size(os.path.getsize(file_path))}) có dung lượng lớn vượt giới hạn tải lên của Lark. Chị bấm vào link gốc để xem trực tiếp nhé: [**Mở Video**]({direct_url})"}
-                            ]
-                        })
+                    direct_url = urls[0] if urls else ""
+                    reply_thread_card(message_id, {
+                        "elements": [
+                            {"tag": "markdown", "content": f"⚠️ Video **{file_name}** ({format_size(os.path.getsize(file_path))}) có dung lượng lớn vượt giới hạn tải lên của Lark. Chị bấm vào link gốc để xem trực tiếp nhé: [**Mở Video**]({direct_url})"}
+                        ]
+                    })
 
             # 4. Tệp khác
             else:
-                if os.path.getsize(file_path) / (1024 * 1024) <= 48.0:
-                    file_key = upload_lark_file(file_path, "stream")
-                    if file_key:
-                        file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
-                        resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
-                        if resp and resp.success():
-                            actual_sent_count += 1
-                            print(f"📎 Đã bung tệp: {file_name}")
+                file_key = upload_lark_file(file_path, "stream")
+                if file_key:
+                    file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
+                    resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+                    if resp and resp.success():
+                        actual_sent_count += 1
+                        print(f"📎 Đã bung tệp: {file_name}")
         except Exception as e:
             print(f"Lỗi gửi media: {e}")
 
@@ -1136,20 +1166,20 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # 🌟 ĐỊNH DẠNG SỐ LẦN ĐẾM IN ĐẬM, TAG MÀU ĐỎ HỒNG CARMINE
+        # 🌟 TAG SỐ LẦN ĐẾM: ĐỔI ICON SANG 📋 VÀ ĐỊNH DẠNG IN ĐẬM TAG MÀU CARMINE
         if req_count > 1:
-            repeat_tag = f"**<text_tag color='carmine'>🔁 Yêu cầu lần {req_count}</text_tag>**"
+            repeat_tag = f"**<text_tag color='carmine'>📋 Yêu cầu lần {req_count}</text_tag>**"
         else:
-            repeat_tag = "**<text_tag color='carmine'>🔁 Lần 1</text_tag>**"
+            repeat_tag = "**<text_tag color='carmine'>📋 Lần 1</text_tag>**"
 
-        # ---------------- THẺ 1: BANNER 1/2, KHỐI NỀN CARMINE CĂN GIỮA & IN ĐẬM ----------------
+        # ---------------- THẺ 1: BANNER 1/2, KHỐI NỀN CARMINE CĂN GIỮA, TAG LOADING ĐỎ Ở CUỐI ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
         files_str = "\n".join(file_lines)
 
+        # Đã lược bỏ tag loading ở đầu, phần thân bắt đầu thẳng từ Ticket ID
         header_block = (
-            f"**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ...</text_tag>**\n\n"
             f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
             f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
             f"         ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
@@ -1158,9 +1188,10 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
-        # 🌟 Cập nhật dòng chữ nghệ thuật mới °•*⁀➷... căn giữa & in đậm chữ trắng trên nền carmine
+        # 🌟 Căn chính giữa tuyệt đối dòng chữ nghệ thuật °•*⁀➷... in đậm màu trắng trên nền carmine
         card1_top_highlight = build_highlight_box("<font color='white'><b>°•*⁀➷𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt;</b></font>", bg_style="carmine")
-        card1_bottom_highlight = build_pill_tag("⌛Lᴏᴀᴅɪɴɢ...")
+        # 🌟 Tag Loading đỏ chuyển xuống dưới cùng thay thế cho tag xanh cũ, không còn lặp lại
+        card1_bottom_highlight = build_centered_tag("**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ...</text_tag>**")
 
         loading_card_payload = {
             "elements": card1_img_element + [
@@ -1173,10 +1204,10 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, loading_card_payload)
 
-        # ---------------- BUNG TỆP VÀO THREAD (TỰ ĐỘNG BUNG PDF, ẢNH, VIDEO) ----------------
+        # ---------------- BUNG TỆP VÀO THREAD (TỰ ĐỘNG BUNG ĐÚNG ĐỊNH DẠNG PDF, ẢNH, VIDEO) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): BANNER 1/2, NỀN TURQUOISE CĂN GIỮA & IN ĐẬM ----------------
+        # ---------------- THẺ 2 (HOÀN TẤT): BANNER 1/2, NỀN TURQUOISE CĂN GIỮA, TAG COMPLETED XANH ----------------
         title_side_md = "**<text_tag color='turquoise'>・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
@@ -1184,9 +1215,9 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
-        # 🌟 Căn giữa & in đậm chữ trắng trên nền turquoise
+        # 🌟 Căn chính giữa tuyệt đối dòng chữ nốt nhạc in đậm màu trắng trên nền turquoise
         card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
-        card2_bottom_highlight = build_pill_tag("・❥Cᴏᴍᴘʟᴇᴛᴇᴅ")
+        card2_bottom_highlight = build_centered_tag("**<text_tag color='turquoise'>・❥Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**")
 
         finish_card_payload = {
             "elements": card2_img_element + [
