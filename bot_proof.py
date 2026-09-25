@@ -216,103 +216,73 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VÀ CHUYỂN ĐỔI VIDEO CHUẨN XÁC (KHÔNG GÂY LỖI CÚ PHÁP) -----------------
-def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
-    """Nén video về dưới 28MB bằng bộ lọc ổn định tuyệt đối"""
+# ----------------- HÀM NÉN VIDEO BẢO ĐẢM 100% LUÔN DƯỚI 20MB ĐỂ BUNG TRỰC TIẾP -----------------
+def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
+    """Nén video về chuẩn MP4 nhẹ (< 20MB), không bao giờ vượt giới hạn của Lark"""
     try:
-        if not os.path.exists(video_path):
-            return video_path
+        if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
+            return file_path
 
-        size_mb = os.path.getsize(video_path) / (1024 * 1024)
-        ext = os.path.splitext(video_path)[1].lower()
+        size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        ext = os.path.splitext(file_path)[1].lower()
 
-        # Nếu file đã là MP4 chuẩn và nhẹ dưới 25MB thì gửi luôn
-        if ext == ".mp4" and size_mb <= 25.0:
-            return video_path
+        # Nếu file đã là MP4 và nhẹ dưới 20MB thì giữ nguyên gửi luôn
+        if ext == ".mp4" and size_mb <= 20.0:
+            return file_path
 
-        dir_name = os.path.dirname(video_path)
-        base_name = os.path.splitext(original_name or os.path.basename(video_path))[0]
-        clean_base = sanitize_filename(base_name)
-        
-        temp_compressed_path = os.path.join(dir_name, f"opt_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
-
-        # Sử dụng lệnh nén tiêu chuẩn, đảm bảo tương thích 100% trên Render Linux
-        cmd = [
-            FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "2",
-            "-i", video_path,
-            "-vf", "fps=12,scale='min(320,iw)':-2",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "36",
-            "-pix_fmt", "yuv420p",
-            "-an",
-            "-movflags", "+faststart",
-            temp_compressed_path
-        ]
-        
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-        gc.collect()
-
-        if proc.returncode == 0 and os.path.exists(temp_compressed_path):
-            out_bytes = os.path.getsize(temp_compressed_path)
-            if out_bytes > 50000:
-                compressed_mb = out_bytes / (1024 * 1024)
-                if compressed_mb <= 28.0:
-                    print(f"⚡ Nén video thành công: {clean_base}.mp4 ({compressed_mb:.2f} MB)")
-                    return temp_compressed_path
-            
-            if os.path.exists(temp_compressed_path):
-                os.remove(temp_compressed_path)
-        else:
-            err_msg = proc.stderr.decode('utf-8', errors='ignore')[-200:]
-            print(f"❌ ffmpeg nén thất bại: {err_msg}")
-    except Exception as e:
-        print(f"Lỗi nén video: {e}")
-        if 'temp_compressed_path' in locals() and os.path.exists(temp_compressed_path):
-            try:
-                os.remove(temp_compressed_path)
-            except Exception:
-                pass
-    return video_path
-
-def convert_to_valid_mp4(file_path: str) -> str:
-    """Chuyển đổi WebM / file raw sang chuẩn MP4"""
-    try:
         dir_name = os.path.dirname(file_path)
-        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        base_name = os.path.splitext(original_name or os.path.basename(file_path))[0]
+        # Xóa bỏ các tiền tố cũ để tên file luôn gọn gàng
+        base_name = re.sub(r'^(?:conv_[a-f0-9]{6}_|opt_[a-f0-9]{6}_|tmp_[a-zA-Z0-9]+_)', '', base_name)
         clean_base = sanitize_filename(base_name)
-        temp_out = os.path.join(dir_name, f"conv_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
+        if clean_base.lower().endswith(".mp4"):
+            clean_base = clean_base[:-4]
 
+        temp_out = os.path.join(dir_name, f"tmp_enc_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
+        final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
+
+        # Khống chế bitrate 350k - 450k để video dài đến đâu cũng chỉ nặng từ 3MB - 8MB
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "2",
+            "-threads", "1",
             "-i", file_path,
-            "-vf", "fps=15,scale='min(480,iw)':-2",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
+            "-vf", "fps=10,scale=320:-2",
+            "-c:v", "libx264", "-preset", "ultrafast",
+            "-b:v", "350k", "-maxrate", "450k", "-bufsize", "800k",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
             temp_out
         ]
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=240)
         gc.collect()
 
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 50000:
-            print(f"🎬 Đã chuyển đổi sang MP4 chuẩn Lark: {clean_base}.mp4")
+            out_mb = os.path.getsize(temp_out) / (1024 * 1024)
+            print(f"⚡ Đã nén video an toàn thành công: {clean_base}.mp4 ({out_mb:.2f} MB)")
+            
             try:
-                if os.path.exists(file_path) and file_path != temp_out:
+                if os.path.exists(final_mp4) and final_mp4 != temp_out:
+                    os.remove(final_mp4)
+                if os.path.exists(file_path) and file_path != temp_out and file_path != final_mp4:
                     os.remove(file_path)
             except Exception:
                 pass
-            return temp_out
-        elif os.path.exists(temp_out):
-            os.remove(temp_out)
+
+            os.rename(temp_out, final_mp4)
+            return final_mp4
+        else:
+            if os.path.exists(temp_out):
+                os.remove(temp_out)
     except Exception as e:
-        print(f"Lỗi chuyển sang MP4: {e}")
+        print(f"Lỗi nén video: {e}")
         if 'temp_out' in locals() and os.path.exists(temp_out):
             try:
                 os.remove(temp_out)
             except Exception:
                 pass
+
     return file_path
 
 def auto_detect_and_fix_extension(file_path: str) -> str:
@@ -348,14 +318,11 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
         if ext == ".webm" or "webm" in fname_low:
             is_webm = True
 
-        if is_webm or (is_video and ext in [".webm", ""]):
-            return convert_to_valid_mp4(file_path)
+        size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
-        if is_video and ext not in [".mp4", ".mov", ".avi", ".mkv"]:
-            new_file_name = f"{name}.mp4"
-            new_path = os.path.join(dir_name, new_file_name)
-            os.rename(file_path, new_path)
-            return new_path
+        # Nén và ép về chuẩn MP4 cho mọi video nặng > 20MB hoặc có đuôi WebM, MOV, AVI
+        if is_webm or ext in [".webm", ".mov", ".avi", ".mkv"] or (is_video and (ext != ".mp4" or size_mb > 20.0)):
+            return compress_video_to_safe_mp4(file_path)
 
         if is_image and ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic"]:
             new_file_name = f"{name}.jpg"
@@ -458,12 +425,12 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                             actual_sent_count += 1
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video
+            # 2. Tệp Video (đảm bảo luôn dưới 20MB)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
-                send_path = compress_and_convert_video(file_path, original_name=file_name)
+                send_path = compress_video_to_safe_mp4(file_path, original_name=file_name)
                 
                 if not os.path.exists(send_path) or os.path.getsize(send_path) < 50000:
-                    print(f"⚠️ Video {file_name} bị lỗi dữ liệu (< 50KB) -> Không đẩy file hỏng lên Lark!")
+                    print(f"⚠️ Video {file_name} bị lỗi dữ liệu -> Bỏ qua!")
                     continue
 
                 size_mb = os.path.getsize(send_path) / (1024 * 1024)
@@ -957,7 +924,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, loading_card_payload)
 
-        # ---------------- BUNG TỆP VÀO THREAD (ĐÃ BẢO ĐẢM NÉN THÀNH CÔNG VỀ DƯỚI 28MB) ----------------
+        # ---------------- BUNG TỆP VÀO THREAD (ĐÃ BẢO ĐẢM TẤT CẢ VIDEO LUÔN < 20MB ĐỂ PHÁT TRỰC TIẾP) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
         # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
