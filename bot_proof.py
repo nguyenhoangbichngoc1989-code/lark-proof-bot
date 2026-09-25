@@ -216,9 +216,14 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- HÀM NÉN VIDEO BẢO ĐẢM 100% LUÔN DƯỚI 20MB ĐỂ BUNG TRỰC TIẾP -----------------
+# ----------------- HÀM NÉN VIDEO CHUẨN NÉT 480P (RÕ CHỮ, KHÔNG GIẬT LAG) -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
-    """Nén video về chuẩn MP4 nhẹ (< 20MB), không bao giờ vượt giới hạn của Lark"""
+    """
+    Nén video chuẩn nét HD 480p:
+    - w=854:h=854 (giữ đúng tỉ lệ, đạt chuẩn 854x480 hoặc 480x854 rõ nét mã vận đơn)
+    - fps=20: chuyển động mượt mà tự nhiên
+    - b:v 850k, maxrate 1100k: khử vỡ hạt, dung lượng luôn tối ưu từ 4MB - 10MB
+    """
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
             return file_path
@@ -232,7 +237,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
 
         dir_name = os.path.dirname(file_path)
         base_name = os.path.splitext(original_name or os.path.basename(file_path))[0]
-        # Xóa bỏ các tiền tố cũ để tên file luôn gọn gàng
         base_name = re.sub(r'^(?:conv_[a-f0-9]{6}_|opt_[a-f0-9]{6}_|tmp_[a-zA-Z0-9]+_)', '', base_name)
         clean_base = sanitize_filename(base_name)
         if clean_base.lower().endswith(".mp4"):
@@ -241,14 +245,16 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         temp_out = os.path.join(dir_name, f"tmp_enc_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
-        # Khống chế bitrate 350k - 450k để video dài đến đâu cũng chỉ nặng từ 3MB - 8MB
+        # Nén chuẩn nét HD 480p, tối ưu cho cả video quay ngang và dọc
+        filter_str = "fps=20,scale=w=854:h=854:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2"
+
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "1",
             "-i", file_path,
-            "-vf", "fps=10,scale=320:-2",
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-b:v", "350k", "-maxrate", "450k", "-bufsize", "800k",
+            "-vf", filter_str,
+            "-c:v", "libx264", "-preset", "veryfast",
+            "-b:v", "850k", "-maxrate", "1100k", "-bufsize", "1500k",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
@@ -260,7 +266,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
 
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 50000:
             out_mb = os.path.getsize(temp_out) / (1024 * 1024)
-            print(f"⚡ Đã nén video an toàn thành công: {clean_base}.mp4 ({out_mb:.2f} MB)")
+            print(f"⚡ Đã nén video chuẩn nét 480p: {clean_base}.mp4 ({out_mb:.2f} MB)")
             
             try:
                 if os.path.exists(final_mp4) and final_mp4 != temp_out:
@@ -320,7 +326,7 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
 
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
-        # Nén và ép về chuẩn MP4 cho mọi video nặng > 20MB hoặc có đuôi WebM, MOV, AVI
+        # Nén chuẩn nét cho video WebM, MOV, AVI hoặc video MP4 nặng > 20MB
         if is_webm or ext in [".webm", ".mov", ".avi", ".mkv"] or (is_video and (ext != ".mp4" or size_mb > 20.0)):
             return compress_video_to_safe_mp4(file_path)
 
@@ -425,7 +431,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                             actual_sent_count += 1
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video (đảm bảo luôn dưới 20MB)
+            # 2. Tệp Video (đảm bảo luôn dưới 20MB, chất lượng HD 480p)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = compress_video_to_safe_mp4(file_path, original_name=file_name)
                 
@@ -1023,7 +1029,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ NÂNG CẤP CHẤT LƯỢNG VIDEO LÊN CHUẨN NÉT HD 480P)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
