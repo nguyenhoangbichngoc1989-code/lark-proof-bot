@@ -216,24 +216,9 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- TÍNH TOÁN BITRATE VÀ NÉN HD SẮC NÉT (DƯỚI 28MB) -----------------
-def get_video_duration(video_path: str) -> float:
-    """Lấy thời lượng video chính xác qua FFmpeg"""
-    try:
-        cmd = [FFMPEG_EXEC, "-i", video_path]
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
-        m = re.search(r'Duration:\s*(\d+):(\d+):(\d+\.?\d*)', proc.stderr)
-        if m:
-            h = float(m.group(1))
-            m_val = float(m.group(2))
-            s = float(m.group(3))
-            return h * 3600 + m_val * 60 + s
-    except Exception:
-        pass
-    return 0.0
-
+# ----------------- NÉN VÀ CHUYỂN ĐỔI VIDEO CHUẨN HD PHÂN TẦNG (CHỐNG LỖI VƯỢT DUNG LƯỢNG) -----------------
 def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
-    """Nén video nét HD nhưng tự động giới hạn bitrate để luôn dưới 25MB"""
+    """Nén video nét HD rõ mã vận đơn và tự động hạ nấc dung lượng luôn dưới 27.5 MB"""
     try:
         if not os.path.exists(video_path):
             return video_path
@@ -241,78 +226,98 @@ def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         ext = os.path.splitext(video_path)[1].lower()
 
-        # Nếu file MP4 gốc đã nhẹ dưới 24MB thì gửi thẳng
-        if ext == ".mp4" and size_mb <= 24.0:
+        # Nếu file MP4 gốc đã nhẹ dưới 25MB thì gửi thẳng, không cần nén
+        if ext == ".mp4" and size_mb <= 25.0:
             return video_path
 
         dir_name = os.path.dirname(video_path)
         base_name = os.path.splitext(original_name or os.path.basename(video_path))[0]
         clean_base = sanitize_filename(base_name)
         
-        temp_compressed_path = os.path.join(dir_name, f"hd_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
-
-        # 1. Tính toán bitrate tối ưu dựa trên thời lượng video để ép dung lượng luôn <= 24.5 MB
-        duration = get_video_duration(video_path)
-        if duration > 0:
-            target_kbps = int((24.0 * 1024 * 8) / duration)
-            if target_kbps > 2800:
-                target_kbps = 2800
-            elif target_kbps < 400:
-                target_kbps = 400
-
-            if target_kbps >= 1200:
-                target_h = 720
-                fps = 24
-            elif target_kbps >= 700:
-                target_h = 540
-                fps = 20
-            else:
-                target_h = 480
-                fps = 18
-        else:
-            target_kbps = 1400
-            target_h = 720
-            fps = 24
-
-        maxrate = int(target_kbps * 1.2)
-        bufsize = int(target_kbps * 2)
-
-        # Cú pháp scale chuẩn: scale=-2:720 (tự động giữ tỷ lệ dọc/ngang không lỗi cú pháp)
-        cmd_hd = [
+        # NẤC 1: HD 720p, CRF 26, khóa chẵn kích thước (chuẩn nét đọc rõ mã đơn)
+        temp_out1 = os.path.join(dir_name, f"hd_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
+        cmd1 = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "1",
             "-i", video_path,
-            "-vf", f"fps={fps},scale=-2:{target_h}",
-            "-c:v", "libx264", "-preset", "veryfast",
-            "-b:v", f"{target_kbps}k",
-            "-maxrate", f"{maxrate}k",
-            "-bufsize", f"{bufsize}k",
+            "-vf", "fps=20,scale=trunc(min(720,iw)/2)*2:-2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
-            temp_compressed_path
+            temp_out1
         ]
-        
-        proc = subprocess.run(cmd_hd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=210)
+
+        proc1 = subprocess.run(cmd1, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=120)
         gc.collect()
 
-        if proc.returncode == 0 and os.path.exists(temp_compressed_path):
-            out_bytes = os.path.getsize(temp_compressed_path)
-            if out_bytes > 50000:
-                compressed_mb = out_bytes / (1024 * 1024)
-                if compressed_mb <= 27.5:
-                    print(f"🎬 Nén HD thành công: {clean_base}.mp4 ({compressed_mb:.2f} MB)")
-                    return temp_compressed_path
+        if proc1.returncode == 0 and os.path.exists(temp_out1):
+            sz1 = os.path.getsize(temp_out1) / (1024 * 1024)
+            if sz1 <= 27.5 and sz1 > 0.05:
+                print(f"🎬 Nén HD 720p thành công: {clean_base}.mp4 ({sz1:.2f} MB)")
+                return temp_out1
+            else:
+                print(f"⚠️ Bản 720p ({sz1:.2f} MB) vượt 27.5MB, tự động chuyển sang nấc 2 (540p)...")
+                try:
+                    os.remove(temp_out1)
+                except Exception:
+                    pass
+        else:
+            print(f"Lưu ý nén Nấc 1: {proc1.stderr[-200:] if proc1.stderr else ''}")
 
-            if os.path.exists(temp_compressed_path):
-                os.remove(temp_compressed_path)
+        # NẤC 2: 540p, CRF 29 (dành cho video dài 3-5 phút như video 94MB)
+        temp_out2 = os.path.join(dir_name, f"hd540_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
+        cmd2 = [
+            FFMPEG_EXEC, "-y", "-nostdin",
+            "-threads", "1",
+            "-i", video_path,
+            "-vf", "fps=18,scale=trunc(min(540,iw)/2)*2:-2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "29",
+            "-pix_fmt", "yuv420p",
+            "-an",
+            "-movflags", "+faststart",
+            temp_out2
+        ]
+
+        proc2 = subprocess.run(cmd2, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=120)
+        gc.collect()
+
+        if proc2.returncode == 0 and os.path.exists(temp_out2):
+            sz2 = os.path.getsize(temp_out2) / (1024 * 1024)
+            if sz2 <= 27.5 and sz2 > 0.05:
+                print(f"🎬 Nén 540p thành công: {clean_base}.mp4 ({sz2:.2f} MB)")
+                return temp_out2
+            else:
+                print(f"⚠️ Bản 540p ({sz2:.2f} MB) vượt 27.5MB, tự động chuyển sang nấc 3 (480p)...")
+                try:
+                    os.remove(temp_out2)
+                except Exception:
+                    pass
+
+        # NẤC 3: 480p, CRF 32 (dành cho video siêu dài trên 10 phút)
+        temp_out3 = os.path.join(dir_name, f"hd480_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
+        cmd3 = [
+            FFMPEG_EXEC, "-y", "-nostdin",
+            "-threads", "1",
+            "-i", video_path,
+            "-vf", "fps=15,scale=trunc(min(480,iw)/2)*2:-2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
+            "-pix_fmt", "yuv420p",
+            "-an",
+            "-movflags", "+faststart",
+            temp_out3
+        ]
+        proc3 = subprocess.run(cmd3, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=120)
+        gc.collect()
+
+        if proc3.returncode == 0 and os.path.exists(temp_out3):
+            sz3 = os.path.getsize(temp_out3) / (1024 * 1024)
+            if sz3 <= 27.5 and sz3 > 0.05:
+                print(f"🎬 Nén 480p thành công: {clean_base}.mp4 ({sz3:.2f} MB)")
+                return temp_out3
+
     except Exception as e:
         print(f"Lỗi nén video: {e}")
-        if 'temp_compressed_path' in locals() and os.path.exists(temp_compressed_path):
-            try:
-                os.remove(temp_compressed_path)
-            except Exception:
-                pass
     return video_path
 
 def convert_to_valid_mp4(file_path: str) -> str:
@@ -327,8 +332,8 @@ def convert_to_valid_mp4(file_path: str) -> str:
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "1",
             "-i", file_path,
-            "-vf", "fps=24,scale=-2:720",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+            "-vf", "fps=20,scale=trunc(min(720,iw)/2)*2:-2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
@@ -499,7 +504,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                             actual_sent_count += 1
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video (Nén tự động dưới 27.5MB)
+            # 2. Tệp Video (Tự động nén HD vừa khít dưới 28MB)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = compress_and_convert_video(file_path, original_name=file_name)
                 
@@ -1045,7 +1050,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, loading_card_payload)
 
-        # ---------------- BUNG TỆP VÀO THREAD (NÉN CHUẨN HD VỪA KHÍT DƯỚI 28MB) ----------------
+        # ---------------- BUNG TỆP VÀO THREAD (NÉN PHÂN TẦNG VỪA KHÍT DƯỚI 28MB) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
         # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
@@ -1144,7 +1149,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TỐI ƯU HÓA BITRATE TỰ ĐỘNG CHỐNG TRÀN DUNG LƯỢNG & NÉT HD)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ SỬA TRIỆT ĐỂ LỖI NÉN TỰ ĐỘNG CHUẨN HD VÀ VỪA KHÍT DUNG LƯỢNG)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
