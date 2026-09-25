@@ -216,9 +216,14 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- HÀM NÉN VIDEO CHUẨN HD 480P ĐẢM BẢO LUÔN < 20MB -----------------
+# ----------------- HÀM NÉN VIDEO HD 720P RÕ NÉT CHI TIẾT AWB & MÃ VẬN ĐƠN -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
-    """Nén video chuẩn HD 480p, tối ưu bitrate để luôn nằm trong khoảng 3MB - 8MB"""
+    """
+    Nén video chuẩn nét HD 720p tối ưu cho việc đọc mã vận đơn & AWB:
+    - Kích thước: max 1280x720 (ngang) hoặc 720x1280 (dọc), bảo đảm chẵn điểm ảnh
+    - Bộ lọc unsharp: làm nét nổi khối viền chữ in và mã vạch barcode
+    - Tự động kiểm soát: nếu video quá dài (> 25MB) sẽ tự động nén nấc 2 an toàn
+    """
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
             return file_path
@@ -226,8 +231,8 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         ext = os.path.splitext(file_path)[1].lower()
 
-        # Nếu file đã là MP4 và nhẹ <= 20MB thì giữ nguyên
-        if ext == ".mp4" and size_mb <= 20.0:
+        # Nếu tệp đã là MP4 nhẹ <= 20MB và không phải tệp quay thô, gửi trực tiếp
+        if ext == ".mp4" and size_mb <= 20.0 and not any(k in file_path.lower() for k in ["raw_", "tmp_"]):
             return file_path
 
         dir_name = os.path.dirname(file_path)
@@ -237,30 +242,71 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         if clean_base.lower().endswith(".mp4"):
             clean_base = clean_base[:-4]
 
-        temp_out = os.path.join(dir_name, f"tmp_enc_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
+        temp_out = os.path.join(dir_name, f"tmp_hd_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
-        # Cú pháp chuẩn hóa scale=480:-2 (đảm bảo luôn chẵn điểm ảnh, không bị lỗi cú pháp)
-        cmd = [
+        # Nấc 1: HD 720p + unsharp tăng độ sắc nét chữ in AWB
+        vf_hd = "scale=w=1280:h=1280:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,unsharp=5:5:0.8:3:3:0.4"
+
+        cmd_hd = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "1",
             "-i", file_path,
-            "-vf", "scale=480:-2,fps=15",
+            "-vf", vf_hd,
+            "-r", "20",
             "-c:v", "libx264", "-preset", "veryfast",
-            "-b:v", "600k", "-maxrate", "800k", "-bufsize", "1200k",
+            "-crf", "23",
+            "-maxrate", "1800k", "-bufsize", "3000k",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
             temp_out
         ]
 
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=240)
+        proc = subprocess.run(cmd_hd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=240)
         gc.collect()
 
+        # Kiểm tra kết quả nấc 1
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 50000:
             out_mb = os.path.getsize(temp_out) / (1024 * 1024)
-            print(f"⚡ Đã nén video HD 480p thành công: {clean_base}.mp4 ({out_mb:.2f} MB)")
-            
+            if out_mb <= 26.0:
+                print(f"✨ Nén HD 720p thành công: {clean_base}.mp4 ({out_mb:.2f} MB)")
+                try:
+                    if os.path.exists(final_mp4) and final_mp4 != temp_out:
+                        os.remove(final_mp4)
+                    if os.path.exists(file_path) and file_path != temp_out and file_path != final_mp4:
+                        os.remove(file_path)
+                except Exception:
+                    pass
+                os.rename(temp_out, final_mp4)
+                return final_mp4
+            else:
+                print(f"⚠️ Bản HD 720p đạt {out_mb:.2f} MB (> 26MB), tiến hành nén nấc 2 tối ưu dung lượng...")
+                if os.path.exists(temp_out):
+                    os.remove(temp_out)
+
+        # Nấc 2 (Dự phòng cho video rất dài): 540p + Bitrate kiểm soát chặt để luôn < 20MB
+        vf_safe = "scale=w=960:h=960:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,unsharp=5:5:0.6:3:3:0.3"
+        cmd_safe = [
+            FFMPEG_EXEC, "-y", "-nostdin",
+            "-threads", "1",
+            "-i", file_path,
+            "-vf", vf_safe,
+            "-r", "16",
+            "-c:v", "libx264", "-preset", "veryfast",
+            "-b:v", "900k", "-maxrate", "1200k", "-bufsize", "2000k",
+            "-pix_fmt", "yuv420p",
+            "-an",
+            "-movflags", "+faststart",
+            temp_out
+        ]
+
+        proc_safe = subprocess.run(cmd_safe, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=200)
+        gc.collect()
+
+        if proc_safe.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 50000:
+            out_mb = os.path.getsize(temp_out) / (1024 * 1024)
+            print(f"⚡ Nén nấc 2 tối ưu thành công: {clean_base}.mp4 ({out_mb:.2f} MB)")
             try:
                 if os.path.exists(final_mp4) and final_mp4 != temp_out:
                     os.remove(final_mp4)
@@ -268,14 +314,12 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
                     os.remove(file_path)
             except Exception:
                 pass
-
             os.rename(temp_out, final_mp4)
             return final_mp4
         else:
             if os.path.exists(temp_out):
                 os.remove(temp_out)
-            err = proc.stderr.decode('utf-8', errors='ignore')[-200:] if proc.stderr else ""
-            print(f"⚠️ Nén chưa hoàn tất: {err}")
+
     except Exception as e:
         print(f"Lỗi nén video: {e}")
         if 'temp_out' in locals() and os.path.exists(temp_out):
@@ -324,7 +368,7 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
 
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
-        # Nén video > 20MB hoặc tệp chưa chuẩn MP4
+        # Mọi video > 20MB hoặc tệp chưa chuẩn MP4 đều đưa vào xử lý làm nét & tối ưu
         if is_webm or ext in [".webm", ".mov", ".avi", ".mkv"] or (is_video and (ext != ".mp4" or size_mb > 20.0)):
             return compress_video_to_safe_mp4(file_path)
 
@@ -528,7 +572,6 @@ def resolve_proof_url(url: str) -> str:
     }
     cur_url = url.strip()
 
-    # Bắt nhanh chuyển hướng bằng stream=True (không tải toàn bộ file nếu là video trực tiếp)
     try:
         r_trace = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=15, verify=False, stream=True)
         final_dest = r_trace.url
@@ -553,7 +596,6 @@ def resolve_proof_url(url: str) -> str:
             return f"{cur_url}{sep}download=1"
         return url
 
-    # Quét sâu nếu link rút gọn trả về trang đệm HTML
     try:
         r_html = global_session.get(cur_url, headers=headers, timeout=12, verify=False)
         html_text = r_html.text
@@ -626,16 +668,13 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     real_title = preferred_name or extract_gdrive_title(file_id)
 
     try:
-        # Bước 1: Yêu cầu tải ban đầu
         init_url = f"https://drive.google.com/uc?export=download&id={file_id}"
         res = global_session.get(init_url, headers=headers, stream=True, verify=False, timeout=30)
         
-        # Nếu tệp nhỏ (< 25MB) được tải trực tiếp
         content_type = res.headers.get("Content-Type", "").lower()
         if res.status_code == 200 and "text/html" not in content_type:
             return _save_gdrive_stream(res, target_dir, real_title, file_id)
 
-        # Bước 2: Tệp > 25MB (40MB/50MB/114MB) chuyển qua trang cảnh báo vi-rút
         html_text = res.text
 
         if not real_title:
@@ -679,7 +718,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"Lỗi tải Drive trực tiếp: {e}")
 
-    # Dự phòng gdown nếu cần
     try:
         import gdown
         clean_save_name = sanitize_filename(real_title or f"gdrive_{file_id}.mp4")
@@ -1061,7 +1099,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TỰ ĐỘNG VƯỢT XÁC NHẬN DRIVE & SỬA LỖI LINK BOM.SO)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ NÂNG CẤP CHUẨN NÉT HD 720P & BỘ LỌC CHI TIẾT AWB)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
