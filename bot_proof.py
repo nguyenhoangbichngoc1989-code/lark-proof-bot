@@ -145,6 +145,43 @@ def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
         }
     ]
 
+# ----------------- HÀM TẠO 2 ĐIỂM NHẤN TRÊN THẺ (CALLOUT BOX & PILL TAG) -----------------
+def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
+    """Tạo khung điểm nhấn trên (Callout Box bo góc nền màu nổi bật)"""
+    return {
+        "tag": "column_set",
+        "flex_mode": "none",
+        "background_style": bg_style,
+        "columns": [
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": content_md
+                        },
+                        "text_align": "left"
+                    }
+                ]
+            }
+        ]
+    }
+
+def build_pill_tag(content_text: str) -> dict:
+    """Tạo tag điểm nhấn dưới dạng viên thuốc bo tròn căn giữa thẻ (đã lược bỏ emoji)"""
+    return {
+        "tag": "div",
+        "text": {
+            "tag": "lark_md",
+            "content": f"<text_tag color='grey'>{content_text}</text_tag>"
+        },
+        "text_align": "center"
+    }
+
 # ----------------- 3. QUẢN LÝ LỊCH SỬ & ĐẾM TẦN SUẤT LẶP LẠI -----------------
 def load_history() -> dict:
     if os.path.exists(HISTORY_FILE):
@@ -1035,7 +1072,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA (TAG ⌛Lᴏᴀᴅɪɴɢ... ĐỎ) ----------------
+        # ---------------- THẺ 1: BANNER THU NHỎ 1/2, KHỐI ĐIỂM NHẤN TRÊN (ĐỎ HỒNG) & DƯỚI ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -1056,10 +1093,16 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
+        # Khối điểm nhấn trên với nền đỏ hồng carmine
+        card1_top_highlight = build_highlight_box("<font color='carmine'><b>[Laugh] 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 >< </b></font>", bg_style="carmine")
+        # Khối điểm nhấn dưới dạng pill tag đã lược bỏ emoji
+        card1_bottom_highlight = build_pill_tag("⌛Lᴏᴀᴅɪɴɢ...")
 
         loading_card_payload = {
             "elements": card1_img_element + [
+                card1_top_highlight,
                 {"tag": "markdown", "content": header_block},
+                card1_bottom_highlight,
                 {"tag": "hr"},
                 {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
             ]
@@ -1069,7 +1112,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- BUNG TỆP VÀO THREAD (ĐÃ BẢO ĐẢM NÉN VỀ DƯỚI 50MB LARK CHO TỆP ĐẾN 500MB) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 (TAG ・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ XANH NGỌC) ----------------
+        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2, KHỐI ĐIỂM NHẤN TRÊN (XANH NGỌC) & DƯỚI ----------------
         title_side_md = "**<text_tag color='turquoise'>・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
@@ -1077,9 +1120,14 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
+        # Khối điểm nhấn trên với nền xanh ngọc turquoise
+        card2_top_highlight = build_highlight_box("<font color='turquoise'><b>[FingerHeart] Great to have everyone </b></font>", bg_style="turquoise")
+        # Khối điểm nhấn dưới dạng pill tag đã lược bỏ emoji
+        card2_bottom_highlight = build_pill_tag("・❥Cᴏᴍᴘʟᴇᴛᴇᴅ")
 
         finish_card_payload = {
             "elements": card2_img_element + [
+                card2_top_highlight,
                 {
                     "tag": "div",
                     "text": {"tag": "lark_md", "content": title_side_md},
@@ -1091,6 +1139,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                     "text": {"tag": "lark_md", "content": thankyou_md},
                     "text_align": "center"
                 },
+                card2_bottom_highlight,
                 {"tag": "hr"},
                 {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
             ]
