@@ -216,14 +216,9 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- HÀM NÉN VIDEO HD 720P RÕ NÉT CHI TIẾT AWB & MÃ VẬN ĐƠN -----------------
+# ----------------- HÀM NÉN VIDEO HD 720P RÕ NÉT AWB & KHÔNG VƯỢT TRẦN 28MB -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
-    """
-    Nén video chuẩn nét HD 720p tối ưu cho việc đọc mã vận đơn & AWB:
-    - Kích thước: max 1280x720 (ngang) hoặc 720x1280 (dọc), bảo đảm chẵn điểm ảnh
-    - Bộ lọc unsharp: làm nét nổi khối viền chữ in và mã vạch barcode
-    - Tự động kiểm soát: nếu video quá dài (> 25MB) sẽ tự động nén nấc 2 an toàn
-    """
+    """Nén video chuẩn HD 720p với bộ lọc tăng nét unsharp, đảm bảo luôn < 25MB"""
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
             return file_path
@@ -231,8 +226,8 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         ext = os.path.splitext(file_path)[1].lower()
 
-        # Nếu tệp đã là MP4 nhẹ <= 20MB và không phải tệp quay thô, gửi trực tiếp
-        if ext == ".mp4" and size_mb <= 20.0 and not any(k in file_path.lower() for k in ["raw_", "tmp_"]):
+        # Nếu file đã là MP4 nhẹ <= 20MB thì giữ nguyên gửi luôn
+        if ext == ".mp4" and size_mb <= 20.0:
             return file_path
 
         dir_name = os.path.dirname(file_path)
@@ -245,7 +240,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         temp_out = os.path.join(dir_name, f"tmp_hd_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
-        # Nấc 1: HD 720p + unsharp tăng độ sắc nét chữ in AWB
+        # Nấc 1: Chuẩn nét HD 720p + unsharp tăng độ tương phản mã vạch barcode
         vf_hd = "scale=w=1280:h=1280:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,unsharp=5:5:0.8:3:3:0.4"
 
         cmd_hd = [
@@ -254,9 +249,9 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
             "-i", file_path,
             "-vf", vf_hd,
             "-r", "20",
-            "-c:v", "libx264", "-preset", "veryfast",
+            "-c:v", "libx264", "-preset", "ultrafast",
             "-crf", "23",
-            "-maxrate", "1800k", "-bufsize", "3000k",
+            "-maxrate", "1500k", "-bufsize", "2500k",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
@@ -266,7 +261,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         proc = subprocess.run(cmd_hd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=240)
         gc.collect()
 
-        # Kiểm tra kết quả nấc 1
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 50000:
             out_mb = os.path.getsize(temp_out) / (1024 * 1024)
             if out_mb <= 26.0:
@@ -281,26 +275,24 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
                 os.rename(temp_out, final_mp4)
                 return final_mp4
             else:
-                print(f"⚠️ Bản HD 720p đạt {out_mb:.2f} MB (> 26MB), tiến hành nén nấc 2 tối ưu dung lượng...")
                 if os.path.exists(temp_out):
                     os.remove(temp_out)
 
-        # Nấc 2 (Dự phòng cho video rất dài): 540p + Bitrate kiểm soát chặt để luôn < 20MB
+        # Nấc 2 (Dự phòng cho video dài nhiều phút): 540p kiểm soát bitrate
         vf_safe = "scale=w=960:h=960:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,unsharp=5:5:0.6:3:3:0.3"
         cmd_safe = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "1",
             "-i", file_path,
             "-vf", vf_safe,
-            "-r", "16",
-            "-c:v", "libx264", "-preset", "veryfast",
-            "-b:v", "900k", "-maxrate", "1200k", "-bufsize", "2000k",
+            "-r", "18",
+            "-c:v", "libx264", "-preset", "ultrafast",
+            "-b:v", "800k", "-maxrate", "1100k", "-bufsize", "1800k",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
             temp_out
         ]
-
         proc_safe = subprocess.run(cmd_safe, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=200)
         gc.collect()
 
@@ -319,7 +311,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         else:
             if os.path.exists(temp_out):
                 os.remove(temp_out)
-
     except Exception as e:
         print(f"Lỗi nén video: {e}")
         if 'temp_out' in locals() and os.path.exists(temp_out):
@@ -477,7 +468,9 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
 
             # 2. Tệp Video
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
-                send_path = compress_video_to_safe_mp4(file_path, original_name=file_name)
+                send_path = f["path"]
+                if os.path.getsize(send_path) / (1024 * 1024) > 25.0:
+                    send_path = compress_video_to_safe_mp4(file_path, original_name=file_name)
                 
                 if not os.path.exists(send_path) or os.path.getsize(send_path) < 50000:
                     print(f"⚠️ Video {file_name} bị lỗi dữ liệu -> Bỏ qua!")
@@ -507,7 +500,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                             ]
                         })
                     else:
-                        print(f"⚠️ Lỗi mạng không thể tải lên video {file_name} lên Lark!")
+                        print(f"⚠️ Lỗi mạng không thể tải video {file_name} lên Lark!")
 
             # 3. Tệp khác
             else:
@@ -527,34 +520,50 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
     return actual_sent_count
 
 # ----------------- 5. GIẢI MÃ LINK ĐA TẦNG CHO BOM.SO, BYVN.NET, L1NK.DEV -----------------
+def is_valid_proof_url(u: str) -> bool:
+    u_low = u.lower()
+    if any(ign in u_low for ign in [
+        "cloudflare.com", "googleapis.com/css", "googletagmanager", "google-analytics",
+        "jsdelivr.net", "w3.org", "facebook.com", "schema.org", "bom.so", "byvn.net", "l1nk.dev"
+    ]):
+        return False
+    return any(k in u_low for k in [
+        "drive.google.com", "drive.usercontent.google.com", "docs.google.com",
+        "sharepoint.com", "1drv.ms", "fptcloud.com", "aliyuncs.com", "tiktokcdn.com",
+        "byteoversea.com", ".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".jpeg", ".png", ".webp"
+    ])
+
 def extract_urls_from_text(raw_text: str) -> list:
     urls = []
     text = html.unescape(raw_text)
     text = urllib.parse.unquote(text)
     text = text.replace(r"\/", "/").replace(r"\u002f", "/").replace(r"\u002F", "/")
 
+    # 1. Quét link trực tiếp
     found = re.findall(r'(https?://[^\s"\'<>]+)', text)
     for u in found:
         clean_u = u.split('"')[0].split("'")[0].split('\\')[0].rstrip(';>,.')
-        if not any(ign in clean_u.lower() for ign in ["byvn.net", "bom.so", "l1nk.dev", "encurtador", "google.com/search", "facebook.com", "w3.org", "schema.org"]):
+        if is_valid_proof_url(clean_u):
             urls.append(clean_u)
 
+    # 2. Giải mã Base64
     b64_candidates = re.findall(r'[A-Za-z0-9+/=]{16,}', raw_text)
     for c in b64_candidates:
         try:
             padded = c + "=" * ((4 - len(c) % 4) % 4)
             dec = base64.b64decode(padded).decode('utf-8', errors='ignore')
-            if any(k in dec for k in ["drive.google.com", "sharepoint", "aliyuncs", "fptcloud", "http"]):
-                dec_urls = re.findall(r'https?://[^\s"\'<>]+', dec)
-                for du in dec_urls:
-                    if not any(ign in du.lower() for ign in ["byvn.net", "bom.so", "l1nk.dev"]):
-                        urls.append(du)
+            for du in re.findall(r'https?://[^\s"\'<>]+', dec):
+                clean_du = du.split('"')[0].split("'")[0].split('\\')[0].rstrip(';>,.')
+                if is_valid_proof_url(clean_du):
+                    urls.append(clean_du)
         except Exception:
             pass
 
-    folder_ids = re.findall(r'folders/([a-zA-Z0-9_-]{28,45})', text)
-    for fid in folder_ids:
+    # 3. Quét ID thư mục/tệp Drive trong mã nguồn
+    for fid in re.findall(r'folders/([a-zA-Z0-9_-]{25,45})', text):
         urls.append(f"https://drive.google.com/drive/folders/{fid}")
+    for fid in re.findall(r'/file/d/([a-zA-Z0-9_-]{25,45})', text):
+        urls.append(f"https://drive.google.com/file/d/{fid}/view")
 
     return list(set(urls))
 
@@ -568,10 +577,12 @@ def resolve_proof_url(url: str) -> str:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://bom.so/"
     }
     cur_url = url.strip()
 
+    # Bắt nhanh chuyển hướng bằng stream=True
     try:
         r_trace = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=15, verify=False, stream=True)
         final_dest = r_trace.url
@@ -596,12 +607,11 @@ def resolve_proof_url(url: str) -> str:
             return f"{cur_url}{sep}download=1"
         return url
 
+    # Quét sâu nếu link rút gọn trả về trang đệm HTML
     try:
         r_html = global_session.get(cur_url, headers=headers, timeout=12, verify=False)
         html_text = r_html.text
-        html_unescaped = html.unescape(html_text).replace(r"\/", "/").replace(r"\u002f", "/")
-
-        found_urls = extract_urls_from_text(html_unescaped)
+        found_urls = extract_urls_from_text(html_text)
         for cand in found_urls:
             print(f"🔗 Bóc tách thành công link đích ẩn trong mã nguồn: {cand}")
             return cand
@@ -657,9 +667,11 @@ def _save_gdrive_stream(res, target_dir: str, real_title: str, file_id: str) -> 
     if os.path.exists(save_path) and os.path.getsize(save_path) > 50000:
         print(f"📥 Đã tải Drive thành công: {clean_save_name} ({format_size(os.path.getsize(save_path))})")
         return True
+    if os.path.exists(save_path):
+        os.remove(save_path)
     return False
 
-# ----------------- TẢI FILE GOOGLE DRIVE VƯỢT QUA TRANG CẢNH BÁO VI-RÚT (> 25MB) -----------------
+# ----------------- TẢI FILE GOOGLE DRIVE VƯỢT QUA TRANG CẢNH BÁO VI-RÚT (> 25MB ĐẾN 200MB) -----------------
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -667,13 +679,23 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     }
     real_title = preferred_name or extract_gdrive_title(file_id)
 
+    # Cách 1: Thử tải trực tiếp qua drive.usercontent.google.com với confirm=t
+    try:
+        direct_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
+        res = global_session.get(direct_url, headers=headers, stream=True, verify=False, timeout=60)
+        if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", "").lower():
+            if _save_gdrive_stream(res, target_dir, real_title, file_id):
+                return True
+    except Exception as e:
+        print(f"Lỗi tải trực tiếp usercontent: {e}")
+
+    # Cách 2: Qua uc?export=download và phân tích toàn diện trang xác nhận vi-rút
     try:
         init_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        res = global_session.get(init_url, headers=headers, stream=True, verify=False, timeout=30)
-        
-        content_type = res.headers.get("Content-Type", "").lower()
-        if res.status_code == 200 and "text/html" not in content_type:
-            return _save_gdrive_stream(res, target_dir, real_title, file_id)
+        res = global_session.get(init_url, headers=headers, stream=True, verify=False, timeout=40)
+        if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", "").lower():
+            if _save_gdrive_stream(res, target_dir, real_title, file_id):
+                return True
 
         html_text = res.text
 
@@ -682,47 +704,58 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
             if fn_match:
                 real_title = fn_match.group(1).strip()
 
-        form_match = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html_text)
-        link_match = re.search(r'<a[^>]+id=["\']uc-download-link["\'][^>]+href=["\']([^"\']+)["\']', html_text)
-        
-        download_url = None
-        params = {}
+        form_params = {}
+        for input_tag in re.findall(r'<input\b[^>]*>', html_text, re.IGNORECASE):
+            name_m = re.search(r'\bname=["\']([^"\']+)["\']', input_tag, re.IGNORECASE)
+            val_m = re.search(r'\bvalue=["\']([^"\']*)["\']', input_tag, re.IGNORECASE)
+            if name_m and val_m:
+                form_params[name_m.group(1)] = val_m.group(1)
 
-        if form_match:
-            download_url = form_match.group(1)
-            input_matches = re.findall(r'<input[^>]+name=["\']([^"\']+)["\'][^>]+value=["\']([^"\']*)["\']', html_text)
-            for k, v in input_matches:
-                params[k] = v
-            if "id" not in params:
-                params["id"] = file_id
-            if "export" not in params:
-                params["export"] = "download"
-        elif link_match:
-            download_url = urllib.parse.urljoin("https://drive.google.com", link_match.group(1))
+        if "confirm" not in form_params:
+            c_m = re.search(r'name=["\']confirm["\'][^>]*value=["\']([^"\']+)["\']', html_text) or re.search(r'confirm=([0-9a-zA-Z_\-]+)', html_text)
+            form_params["confirm"] = c_m.group(1) if c_m else "t"
+
+        if "uuid" not in form_params:
+            u_m = re.search(r'name=["\']uuid["\'][^>]*value=["\']([^"\']+)["\']', html_text) or re.search(r'uuid=([0-9a-zA-Z_\-]+)', html_text)
+            if u_m:
+                form_params["uuid"] = u_m.group(1)
+
+        if "id" not in form_params:
+            form_params["id"] = file_id
+        if "export" not in form_params:
+            form_params["export"] = "download"
+
+        action_m = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
+        if action_m:
+            action_url = action_m.group(1)
+            download_url = action_url if action_url.startswith("http") else urllib.parse.urljoin("https://drive.usercontent.google.com", action_url)
         else:
-            uuid_match = re.search(r'name="uuid"\s+value="([^"]+)"', html_text) or re.search(r'uuid=([a-f0-9\-]+)', html_text)
-            confirm_match = re.search(r'name="confirm"\s+value="([^"]+)"', html_text) or re.search(r'confirm=([0-9a-zA-Z_]+)', html_text)
-            uuid_val = uuid_match.group(1) if uuid_match else ""
-            confirm_val = confirm_match.group(1) if confirm_match else "t"
-            
             download_url = "https://drive.usercontent.google.com/download"
-            params = {"id": file_id, "export": "download", "confirm": confirm_val}
-            if uuid_val:
-                params["uuid"] = uuid_val
 
-        if download_url:
-            res_down = global_session.get(download_url, params=params, headers=headers, stream=True, verify=False, timeout=180)
-            if res_down.status_code == 200 and "text/html" not in res_down.headers.get("Content-Type", "").lower():
-                return _save_gdrive_stream(res_down, target_dir, real_title, file_id)
+        headers_down = headers.copy()
+        headers_down["Referer"] = res.url
+
+        method_m = re.search(r'<form[^>]+method=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
+        method = method_m.group(1).upper() if method_m else "GET"
+
+        if method == "POST":
+            res_down = global_session.post(download_url, data=form_params, headers=headers_down, stream=True, verify=False, timeout=240)
+        else:
+            res_down = global_session.get(download_url, params=form_params, headers=headers_down, stream=True, verify=False, timeout=240)
+
+        if res_down.status_code == 200 and "text/html" not in res_down.headers.get("Content-Type", "").lower():
+            if _save_gdrive_stream(res_down, target_dir, real_title, file_id):
+                return True
 
     except Exception as e:
-        print(f"Lỗi tải Drive trực tiếp: {e}")
+        print(f"Lỗi tải Drive qua uc: {e}")
 
+    # Cách 3: Dự phòng bằng gdown
     try:
         import gdown
         clean_save_name = sanitize_filename(real_title or f"gdrive_{file_id}.mp4")
         fallback_path = os.path.join(target_dir, clean_save_name)
-        output = gdown.download(id=file_id, output=fallback_path, quiet=True)
+        output = gdown.download(url=f"https://drive.google.com/uc?id={file_id}", output=fallback_path, quiet=False, fuzzy=True)
         if output and os.path.exists(output) and os.path.getsize(output) > 50000:
             print(f"📥 Đã tải Drive bằng gdown thành công: {clean_save_name}")
             return True
@@ -772,11 +805,12 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 def download_proof(url: str, target_dir: str) -> bool:
     final_url = resolve_proof_url(url)
     
-    if "drive.google.com" in final_url:
+    # Bắt mọi domain thuộc Google Drive
+    if any(k in final_url for k in ["drive.google.com", "drive.usercontent.google.com", "docs.google.com"]):
         if "/folders/" in final_url:
             return download_gdrive_folder(final_url, target_dir)
         else:
-            match = re.search(r'(?:/file/d/|id=)([a-zA-Z0-9_-]{25,50})', final_url)
+            match = re.search(r'(?:/file/d/|/d/|id=|download\?id=)([a-zA-Z0-9_-]{25,50})', final_url)
             if match:
                 return download_single_gdrive_file(match.group(1), target_dir)
 
@@ -1000,7 +1034,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, loading_card_payload)
 
-        # ---------------- BUNG TỆP VÀO THREAD (ĐÃ BẢO ĐẢM TẤT CẢ VIDEO LUÔN < 20MB ĐỂ PHÁT TRỰC TIẾP) ----------------
+        # ---------------- BUNG TỆP VÀO THREAD (CHUẨN NÉT HD 720P) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
         # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
@@ -1099,7 +1133,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ NÂNG CẤP CHUẨN NÉT HD 720P & BỘ LỌC CHI TIẾT AWB)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TỐI ƯU TOÀN DIỆN BOM.SO & VƯỢT XÁC NHẬN GOOGLE DRIVE < 200MB)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
