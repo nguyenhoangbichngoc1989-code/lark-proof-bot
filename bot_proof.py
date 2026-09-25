@@ -147,7 +147,6 @@ def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
 
 # ----------------- HÀM TẠO 2 ĐIỂM NHẤN TRÊN THẺ (CALLOUT BOX & PILL TAG) -----------------
 def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
-    """Tạo khung điểm nhấn trên (Callout Box bo góc nền màu nổi bật)"""
     return {
         "tag": "column_set",
         "flex_mode": "none",
@@ -172,7 +171,6 @@ def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
     }
 
 def build_pill_tag(content_text: str) -> dict:
-    """Tạo tag điểm nhấn dưới dạng viên thuốc bo tròn căn giữa thẻ (đã lược bỏ emoji)"""
     return {
         "tag": "div",
         "text": {
@@ -224,7 +222,7 @@ def sanitize_filename(filename: str) -> str:
     nfkd = unicodedata.normalize('NFKD', filename)
     ascii_name = re.sub(r'[^\w\s.-]', '', nfkd.encode('ASCII', 'ignore').decode('ASCII'))
     clean = re.sub(r'\s+', '_', ascii_name).strip()
-    return clean or "proof_file.mp4"
+    return clean or "proof_file"
 
 def get_tenant_access_token() -> str:
     try:
@@ -253,9 +251,8 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- HÀM NÉN VIDEO CHO TỆP ĐẾN 500MB (BẢO ĐẢM XUẤT 6MB - 14MB, RÕ NÉT AWB) -----------------
+# ----------------- HÀM NÉN VIDEO CHO TỆP ĐẾN 500MB -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
-    """Nén video lớn (đến gần 500MB) về chuẩn MP4 HD 720p an toàn (< 25MB), giữ nét AWB & Barcode"""
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
             return file_path
@@ -263,7 +260,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         ext = os.path.splitext(file_path)[1].lower()
 
-        # Nếu file đã là MP4 nhẹ <= 20MB thì giữ nguyên gửi luôn
         if ext == ".mp4" and size_mb <= 20.0 and not any(k in file_path.lower() for k in ["raw_", "tmp_"]):
             return file_path
 
@@ -279,7 +275,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         temp_out = os.path.join(dir_name, f"tmp_hd_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
-        # Nấc 1: Chuẩn nét HD 720p tối ưu cho video lớn
         vf_hd = "scale=w=1280:h=1280:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=20,eq=contrast=1.15"
 
         cmd_hd = [
@@ -315,7 +310,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
                 if os.path.exists(temp_out):
                     os.remove(temp_out)
 
-        # Nấc 2 dự phòng an toàn cho video thời lượng rất dài
         vf_safe = "scale=w=854:h=854:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
         cmd_safe = [
             FFMPEG_EXEC, "-y", "-nostdin",
@@ -357,6 +351,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
 
     return file_path
 
+# ----------------- TỰ ĐỘNG NHẬN DIỆN MAGIC BYTES: PDF, ẢNH (JPG/PNG), VIDEO -----------------
 def auto_detect_and_fix_extension(file_path: str) -> str:
     try:
         dir_name = os.path.dirname(file_path)
@@ -364,46 +359,76 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
         name, ext = os.path.splitext(base_name)
         ext = ext.lower()
 
+        is_pdf = False
+        is_image = False
         is_video = False
         is_webm = False
-        is_image = False
-
-        if ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp", ".ts"]:
-            is_video = True
+        suggested_ext = ""
 
         if os.path.exists(file_path) and os.path.getsize(file_path) > 32:
             with open(file_path, "rb") as f:
                 header = f.read(128)
 
-            if header.startswith(b"\x1a\x45\xdf\xa3"):
-                is_video = True
-                is_webm = True
-            elif b"ftyp" in header[:32] or b"moov" in header[:64] or b"mdat" in header[:64]:
-                is_video = True
-            elif (header.startswith(b"RIFF") and b"AVI " in header[8:16]) or header.startswith(b"FLV"):
-                is_video = True
-            elif header.startswith(b"\xff\xd8\xff") or header.startswith(b"\x89PNG\r\n\x1a\n") or header.startswith(b"GIF8"):
+            # 1. Nhận diện tệp PDF chuẩn xác
+            if header.startswith(b"%PDF"):
+                is_pdf = True
+                suggested_ext = ".pdf"
+            # 2. Nhận diện tệp Ảnh
+            elif header.startswith(b"\xff\xd8\xff"):
                 is_image = True
+                suggested_ext = ".jpg"
+            elif header.startswith(b"\x89PNG\r\n\x1a\n"):
+                is_image = True
+                suggested_ext = ".png"
+            elif header.startswith(b"GIF8"):
+                is_image = True
+                suggested_ext = ".gif"
             elif header.startswith(b"RIFF") and b"WEBP" in header[8:16]:
                 is_image = True
+                suggested_ext = ".webp"
+            # 3. Nhận diện Video
+            elif header.startswith(b"\x1a\x45\xdf\xa3"):
+                is_video = True
+                is_webm = True
+                suggested_ext = ".webm"
+            elif b"ftyp" in header[:32] or b"moov" in header[:64] or b"mdat" in header[:64]:
+                is_video = True
+                suggested_ext = ".mp4"
+            elif (header.startswith(b"RIFF") and b"AVI " in header[8:16]) or header.startswith(b"FLV"):
+                is_video = True
+                suggested_ext = ".mp4"
+
+        # Nếu là tệp PDF: Đảm bảo đuôi tệp luôn là .pdf và không bao giờ chuyển sang video
+        if is_pdf or ext == ".pdf":
+            if ext != ".pdf":
+                new_path = os.path.join(dir_name, f"{name}.pdf")
+                os.rename(file_path, new_path)
+                print(f"📄 Nhận diện chuẩn xác tệp PDF: {os.path.basename(new_path)}")
+                return new_path
+            return file_path
+
+        # Nếu là tệp Ảnh: Gắn đúng đuôi ảnh
+        if is_image or ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic"]:
+            if ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic"]:
+                new_ext = suggested_ext or ".jpg"
+                new_path = os.path.join(dir_name, f"{name}{new_ext}")
+                os.rename(file_path, new_path)
+                print(f"🖼️ Nhận diện chuẩn xác tệp Ảnh: {os.path.basename(new_path)}")
+                return new_path
+            return file_path
+
+        # Nếu là Video:
+        if ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp", ".ts"]:
+            is_video = True
 
         fname_low = base_name.lower()
-        if any(k in fname_low for k in ["rc-upload", "video", "khui", "quay", "clip", "cam", "pack", "boc", "dong", "hang", "img_"]):
-            is_video = True
         if ext == ".webm" or "webm" in fname_low:
             is_webm = True
 
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
-        # Hỗ trợ xử lý tệp video lên đến gần 500MB
         if is_webm or ext in [".webm", ".mov", ".avi", ".mkv"] or (is_video and (ext != ".mp4" or size_mb > 15.0)):
             return compress_video_to_safe_mp4(file_path)
-
-        if is_image and ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic"]:
-            new_file_name = f"{name}.jpg"
-            new_path = os.path.join(dir_name, new_file_name)
-            os.rename(file_path, new_path)
-            return new_path
 
     except Exception as e:
         print(f"Lỗi kiểm tra tệp: {e}")
@@ -446,7 +471,7 @@ def remove_reaction_from_message(message_id: str, reaction_id: str):
     except Exception as e:
         print(f"Lỗi gỡ reaction: {e}")
 
-# ----------------- TẢI LÊN FILE LARK -----------------
+# ----------------- TẢI LÊN FILE LARK (PDF, STREAM, MP4) -----------------
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
     if not os.path.exists(file_path):
         return ""
@@ -487,7 +512,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
         file_name = f["name"]
 
         try:
-            # 1. Hình ảnh
+            # 1. Hình ảnh: .jpg, .jpeg, .png, .webp, .gif
             if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".jfif", ".svg", ".tiff"]:
                 with open(file_path, "rb") as img_f:
                     create_req = CreateImageRequest.builder() \
@@ -502,7 +527,18 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                             actual_sent_count += 1
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video
+            # 2. Tệp PDF: bung trực tiếp tệp PDF vào thread
+            elif file_ext == ".pdf":
+                if os.path.getsize(file_path) / (1024 * 1024) <= 48.0:
+                    file_key = upload_lark_file(file_path, "pdf") or upload_lark_file(file_path, "stream")
+                    if file_key:
+                        file_body = ReplyMessageRequestBody.builder().content(json.dumps({"file_key": file_key})).msg_type("file").reply_in_thread(True).build()
+                        resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
+                        if resp and resp.success():
+                            actual_sent_count += 1
+                            print(f"📄 Đã bung tệp PDF vào thread: {file_name}")
+
+            # 3. Tệp Video: .mp4, .mov, .webm,...
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = f["path"]
                 if os.path.getsize(send_path) / (1024 * 1024) > 20.0:
@@ -535,10 +571,8 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                                 {"tag": "markdown", "content": f"⚠️ Video **{file_name}** ({format_size(os.path.getsize(file_path))}) có dung lượng lớn vượt giới hạn tải lên của Lark. Chị bấm vào link gốc để xem trực tiếp nhé: [**Mở Video**]({direct_url})"}
                             ]
                         })
-                    else:
-                        print(f"⚠️ Lỗi mạng không thể tải video {file_name} lên Lark!")
 
-            # 3. Tệp khác
+            # 4. Tệp tài liệu khác
             else:
                 if os.path.getsize(file_path) / (1024 * 1024) <= 48.0:
                     file_key = upload_lark_file(file_path, "stream")
@@ -566,7 +600,7 @@ def is_valid_proof_url(u: str) -> bool:
     return any(k in u_low for k in [
         "drive.google.com", "drive.usercontent.google.com", "docs.google.com",
         "sharepoint.com", "1drv.ms", "fptcloud.com", "aliyuncs.com", "tiktokcdn.com",
-        "byteoversea.com", ".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".jpeg", ".png", ".webp"
+        "byteoversea.com", ".pdf", ".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".jpeg", ".png", ".webp"
     ])
 
 def extract_urls_from_text(raw_text: str) -> list:
@@ -613,7 +647,7 @@ def resolve_proof_url(url: str) -> str:
         return "https://drive.google.com/drive/folders/1JYNtOAYE-BD0P3XkEyXfT78oC5j_GFH8"
 
     if any(k in u_clean.lower() for k in [
-        ".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm", ".avi", ".mkv",
+        ".pdf", ".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm", ".avi", ".mkv",
         "aliyuncs.com", "oss-", "rc-upload", "tiktokcdn.com", "byteoversea.com", "fptcloud.com"
     ]):
         return u_clean
@@ -696,7 +730,7 @@ def _save_gdrive_stream(res, target_dir: str, real_title: str, file_id: str) -> 
             except Exception:
                 extracted_name = fn_match.group(1)
 
-    raw_save_name = real_title or extracted_name or f"gdrive_{file_id}.mp4"
+    raw_save_name = real_title or extracted_name or f"gdrive_{file_id}"
     clean_save_name = sanitize_filename(raw_save_name)
     save_path = os.path.join(target_dir, clean_save_name)
 
@@ -710,7 +744,7 @@ def _save_gdrive_stream(res, target_dir: str, real_title: str, file_id: str) -> 
         for chunk in res.iter_content(chunk_size=1024 * 1024):
             if chunk:
                 f.write(chunk)
-    if os.path.exists(save_path) and os.path.getsize(save_path) > 50000:
+    if os.path.exists(save_path) and os.path.getsize(save_path) > 1000:
         print(f"📥 Đã tải Drive thành công: {clean_save_name} ({format_size(os.path.getsize(save_path))})")
         return True
     if os.path.exists(save_path):
@@ -744,7 +778,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
         html_text = res.text
 
         if not real_title:
-            fn_match = re.search(r'([a-zA-Z0-9_\-\. ]+\.(?:mp4|mov|avi|mkv|webm))\s*\(\d+M\)', html_text)
+            fn_match = re.search(r'([a-zA-Z0-9_\-\. ]+\.(?:pdf|mp4|mov|avi|mkv|webm|jpg|png))\s*\(\d+M\)', html_text)
             if fn_match:
                 real_title = fn_match.group(1).strip()
 
@@ -796,10 +830,10 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
     try:
         import gdown
-        clean_save_name = sanitize_filename(real_title or f"gdrive_{file_id}.mp4")
+        clean_save_name = sanitize_filename(real_title or f"gdrive_{file_id}")
         fallback_path = os.path.join(target_dir, clean_save_name)
         output = gdown.download(url=f"https://drive.google.com/uc?id={file_id}", output=fallback_path, quiet=False, fuzzy=True)
-        if output and os.path.exists(output) and os.path.getsize(output) > 50000:
+        if output and os.path.exists(output) and os.path.getsize(output) > 1000:
             print(f"📥 Đã tải Drive bằng gdown thành công: {clean_save_name}")
             return True
     except Exception as e:
@@ -807,7 +841,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
     return False
 
-# ----------------- TẢI TOÀN BỘ FILE TRONG THƯ MỤC GOOGLE DRIVE (HỖ TRỢ BIT.LY/46Zbvjn) -----------------
+# ----------------- TẢI TOÀN BỘ FILE TRONG THƯ MỤC GOOGLE DRIVE -----------------
 def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
     folder_match = re.search(r'/folders/([a-zA-Z0-9_-]+)', folder_url)
     folder_id = folder_match.group(1) if folder_match else ""
@@ -893,8 +927,9 @@ def download_proof(url: str, target_dir: str) -> bool:
 
         raw_name = extracted_name or os.path.basename(urllib.parse.urlparse(final_url).path) or "downloaded_file"
 
-        if ("webm" in content_type or "rc-upload" in raw_name.lower() or "aliyuncs.com" in final_url) and "." not in raw_name:
-            raw_name = f"{raw_name}.webm"
+        # Nếu content_type là pdf hoặc link có chứa pdf
+        if "application/pdf" in content_type and not raw_name.lower().endswith(".pdf"):
+            raw_name = f"{raw_name}.pdf"
 
         save_name = sanitize_filename(raw_name)
         save_path = os.path.join(target_dir, save_name)
@@ -920,13 +955,13 @@ def download_proof(url: str, target_dir: str) -> bool:
                 except Exception as e:
                     print(f"Lỗi giải nén ZIP: {e}")
 
-            if os.path.exists(save_path) and os.path.getsize(save_path) > 1000:
+            if os.path.exists(save_path) and os.path.getsize(save_path) > 500:
                 print(f"📥 Đã tải trực tiếp thành công: {save_name} ({format_size(os.path.getsize(save_path))})")
                 return True
             elif os.path.exists(save_path):
                 os.remove(save_path)
     except Exception as e:
-        print(f"Lỗi tải trực tiếp FPT Cloud / Web: {e}")
+        print(f"Lỗi tải trực tiếp: {e}")
 
     return False
 
@@ -982,7 +1017,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         for root, _, fs in os.walk(task_temp_dir):
             for f in fs:
                 p = os.path.join(root, f)
-                if os.path.getsize(p) > 1000 and not os.path.basename(p).startswith("tmp_"):
+                if os.path.getsize(p) > 500 and not os.path.basename(p).startswith("tmp_"):
                     downloaded_paths.append(p)
 
         final_files = []
@@ -1072,7 +1107,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: BANNER THU NHỎ 1/2, KHỐI ĐIỂM NHẤN TRÊN (ĐỎ HỒNG) & DƯỚI ----------------
+        # ---------------- THẺ 1: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA (TAG ⌛Lᴏᴀᴅɪɴɢ... ĐỎ) ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -1093,9 +1128,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
-        # Khối điểm nhấn trên với nền đỏ hồng carmine
-        card1_top_highlight = build_highlight_box("<font color='carmine'><b>[Laugh] 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 >< </b></font>", bg_style="carmine")
-        # Khối điểm nhấn dưới dạng pill tag đã lược bỏ emoji
+        card1_top_highlight = build_highlight_box("<font color='white'><b>[Laugh] 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 >< </b></font>", bg_style="carmine")
         card1_bottom_highlight = build_pill_tag("⌛Lᴏᴀᴅɪɴɢ...")
 
         loading_card_payload = {
@@ -1109,10 +1142,10 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, loading_card_payload)
 
-        # ---------------- BUNG TỆP VÀO THREAD (ĐÃ BẢO ĐẢM NÉN VỀ DƯỚI 50MB LARK CHO TỆP ĐẾN 500MB) ----------------
+        # ---------------- BUNG TỆP VÀO THREAD (ĐÃ TỰ ĐỘNG BUNG ĐÚNG ĐỊNH DẠNG PDF, ẢNH, VIDEO) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2, KHỐI ĐIỂM NHẤN TRÊN (XANH NGỌC) & DƯỚI ----------------
+        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 (TAG ・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ XANH NGỌC) ----------------
         title_side_md = "**<text_tag color='turquoise'>・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
@@ -1120,9 +1153,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
-        # Khối điểm nhấn trên với nền xanh ngọc turquoise
-        card2_top_highlight = build_highlight_box("<font color='turquoise'><b>[FingerHeart] Great to have everyone </b></font>", bg_style="turquoise")
-        # Khối điểm nhấn dưới dạng pill tag đã lược bỏ emoji
+        card2_top_highlight = build_highlight_box("<font color='white'><b>[FingerHeart] Great to have everyone </b></font>", bg_style="turquoise")
         card2_bottom_highlight = build_pill_tag("・❥Cᴏᴍᴘʟᴇᴛᴇᴅ")
 
         finish_card_payload = {
@@ -1209,7 +1240,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ NHẬN DIỆN CHUẨN XÁC PDF, ẢNH & VIDEO)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
