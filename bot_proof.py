@@ -216,8 +216,9 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VÀ CHUYỂN ĐỔI VIDEO CHỐNG TRÀN RAM RENDER (ANTI-OOM) -----------------
+# ----------------- NÉN VÀ CHUYỂN ĐỔI VIDEO CHUẨN HD SẮC NÉT (CHỐNG MỜ & CHỐNG OOM) -----------------
 def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
+    """Nén video chất lượng cao HD 720p, đọc rõ mã vận đơn và chi tiết đơn hàng"""
     try:
         if not os.path.exists(video_path):
             return video_path
@@ -225,6 +226,7 @@ def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         ext = os.path.splitext(video_path)[1].lower()
 
+        # Nếu file MP4 gốc đã nhẹ dưới 25MB thì gửi thẳng, không cần nén để giữ trọn vẹn 100% gốc
         if ext == ".mp4" and size_mb <= 25.0:
             return video_path
 
@@ -232,21 +234,21 @@ def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
         base_name = os.path.splitext(original_name or os.path.basename(video_path))[0]
         clean_base = sanitize_filename(base_name)
         
-        temp_compressed_path = os.path.join(dir_name, f"opt_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
+        temp_compressed_path = os.path.join(dir_name, f"hd_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
 
-        cmd = [
+        # NẤC 1: Chuẩn HD 720p, CRF 27, 24 FPS, giữ nguyên độ nét chi tiết kiện hàng
+        cmd_hd = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "1",
             "-i", video_path,
-            "-vf", "fps=10,scale=320:-2:flags=fast_bilinear",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "38",
+            "-vf", "fps=24,scale='min(720,iw)':-2:flags=bicubic",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "27",
             "-pix_fmt", "yuv420p",
-            "-an",
             "-movflags", "+faststart",
             temp_compressed_path
         ]
         
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
+        proc = subprocess.run(cmd_hd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=210)
         gc.collect()
 
         if proc.returncode == 0 and os.path.exists(temp_compressed_path):
@@ -254,9 +256,30 @@ def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
             if out_bytes > 50000:
                 compressed_mb = out_bytes / (1024 * 1024)
                 if compressed_mb <= 28.0:
-                    print(f"⚡ Nén video thành công: {clean_base}.mp4 ({compressed_mb:.2f} MB)")
+                    print(f"🎬 Nén HD 720p thành công: {clean_base}.mp4 ({compressed_mb:.2f} MB)")
                     return temp_compressed_path
-            
+                else:
+                    # NẤC 2: Nếu video quá dài (>28MB), chuyển sang 540p CRF 30 vẫn rất rõ nét
+                    print(f"⚠️ Bản 720p hơi lớn ({compressed_mb:.2f} MB), chuyển sang nén tối ưu 540p...")
+                    os.remove(temp_compressed_path)
+                    temp_540p = os.path.join(dir_name, f"hd540_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
+                    cmd_540 = [
+                        FFMPEG_EXEC, "-y", "-nostdin",
+                        "-threads", "1",
+                        "-i", video_path,
+                        "-vf", "fps=20,scale='min(540,iw)':-2:flags=bicubic",
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+                        "-pix_fmt", "yuv420p",
+                        "-movflags", "+faststart",
+                        temp_540p
+                    ]
+                    proc2 = subprocess.run(cmd_540, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
+                    if proc2.returncode == 0 and os.path.exists(temp_540p):
+                        out_bytes2 = os.path.getsize(temp_540p)
+                        if out_bytes2 > 50000 and (out_bytes2 / (1024 * 1024)) <= 28.0:
+                            print(f"🎬 Nén 540p thành công: {clean_base}.mp4 ({out_bytes2 / (1024 * 1024):.2f} MB)")
+                            return temp_540p
+
             if os.path.exists(temp_compressed_path):
                 os.remove(temp_compressed_path)
     except Exception as e:
@@ -269,6 +292,7 @@ def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
     return video_path
 
 def convert_to_valid_mp4(file_path: str) -> str:
+    """Chuyển đổi WebM / file raw sang chuẩn MP4 chất lượng cao"""
     try:
         dir_name = os.path.dirname(file_path)
         base_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -279,10 +303,9 @@ def convert_to_valid_mp4(file_path: str) -> str:
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "1",
             "-i", file_path,
-            "-vf", "fps=15,scale=480:-2:flags=fast_bilinear",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
+            "-vf", "fps=24,scale='min(720,iw)':-2:flags=bicubic",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
             "-pix_fmt", "yuv420p",
-            "-an",
             "-movflags", "+faststart",
             temp_out
         ]
@@ -451,7 +474,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                             actual_sent_count += 1
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video
+            # 2. Tệp Video (Nén chuẩn HD 720p nét căng)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = compress_and_convert_video(file_path, original_name=file_name)
                 
@@ -473,7 +496,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                     resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     if resp and resp.success():
                         actual_sent_count += 1
-                        print(f"📥 Đã bung video phát trực tiếp: {os.path.basename(send_path)}")
+                        print(f"📥 Đã bung video phát trực tiếp nét căng: {os.path.basename(send_path)}")
                 else:
                     direct_url = urls[0] if urls else ""
                     reply_thread_card(message_id, {
@@ -507,7 +530,6 @@ def extract_urls_from_text(raw_text: str) -> list:
     text = urllib.parse.unquote(text)
     text = text.replace(r"\/", "/").replace(r"\u002f", "/").replace(r"\u002F", "/")
 
-    # 1. Quét link Drive / SharePoint / Cloud / File trực tiếp
     found = re.findall(r'(https?://[^\s"\'<>]+)', text)
     for u in found:
         clean_u = u.split('"')[0].split("'")[0].split('\\')[0].rstrip(';>,.')
@@ -518,7 +540,6 @@ def extract_urls_from_text(raw_text: str) -> list:
             ]):
                 urls.append(clean_u)
 
-    # 2. Giải mã Base64
     b64_candidates = re.findall(r'[A-Za-z0-9+/=]{16,}', raw_text)
     for c in b64_candidates:
         try:
@@ -532,7 +553,6 @@ def extract_urls_from_text(raw_text: str) -> list:
         except Exception:
             pass
 
-    # 3. Quét ID thư mục Google Drive
     folder_ids = re.findall(r'folders/([a-zA-Z0-9_-]{28,45})', text)
     for fid in folder_ids:
         urls.append(f"https://drive.google.com/drive/folders/{fid}")
@@ -540,14 +560,12 @@ def extract_urls_from_text(raw_text: str) -> list:
     return list(set(urls))
 
 def resolve_proof_url(url: str) -> str:
-    # 1. Link đã là file trực tiếp hoặc server cloud chính thức
     if any(k in url.lower() for k in [
         ".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm", ".avi", ".mkv",
         "aliyuncs.com", "oss-", "rc-upload", "tiktokcdn.com", "byteoversea.com", "fptcloud.com"
     ]):
         return url
 
-    # 2. Xử lý SharePoint
     if "stream.aspx" in url and "id=" in url:
         m = re.search(r'id=([^&]+)', url)
         if m:
@@ -564,7 +582,7 @@ def resolve_proof_url(url: str) -> str:
     cur_url = url
     print(f"🔍 Bắt đầu bóc tách link rút gọn: {cur_url}")
 
-    # 3. Sử dụng CURL để bắt link chuyển hướng (301/302) trong 0.5s mà không bị nghẽn
+    # Bóc tách bằng Curl siêu tốc 0.5s
     try:
         cmd = [
             "curl", "-s", "-L", "-o", "/dev/null", "-w", "%{url_effective}",
@@ -585,7 +603,7 @@ def resolve_proof_url(url: str) -> str:
     except Exception as e:
         print(f"Lưu ý curl effective: {e}")
 
-    # 4. Nếu vẫn là trang chờ (splash/interstitial page), tải HTML để bóc tách sâu
+    # Quét sâu HTML nếu gặp trang đệm
     html_text = ""
     try:
         cmd_body = [
@@ -621,35 +639,30 @@ def resolve_proof_url(url: str) -> str:
             print(f"🔗 Bóc tách thành công link đích từ HTML: {cand}")
             return cand
 
-        # Quét iframe
         iframe_match = re.search(r'<iframe[^>]+src=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
         if iframe_match:
             if_src = iframe_match.group(1)
             if if_src.startswith("http") and not any(s in if_src.lower() for s in ["byvn.net", "bom.so", "google.com/recaptcha"]):
                 return if_src
 
-        # Quét meta refresh
         meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', html_text, re.IGNORECASE)
         if meta_match:
             dest = urllib.parse.urljoin(cur_url, meta_match.group(1))
             if not any(s in dest.lower() for s in ["byvn.net", "bom.so"]):
                 return dest
 
-        # Quét javascript redirect
         js_match = re.search(r'(?:window\.location(?:\.href)?|location\.replace|location\.assign|location\.href)\s*=\s*["\']([^"\']+)["\']', html_text)
         if js_match:
             dest = js_match.group(1).replace(r"\/", "/")
             if dest.startswith("http") and not any(s in dest.lower() for s in ["byvn.net", "bom.so"]):
                 return dest
 
-        # Quét nút bấm tiếp tục / download / chuyển hướng
         btn_match = re.search(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(?:[\s\S]*?(?:Go to destination|Chuyển tiếp|Download|Tiếp tục|Xem ngay|Tải xuống|Lấy link))', html_text, re.IGNORECASE)
         if btn_match:
             b_url = btn_match.group(1)
             if b_url.startswith("http") and not any(s in b_url.lower() for s in ["byvn.net", "bom.so"]):
                 return b_url
 
-        # Quét URL query parameter (?url=https... hoặc ?target=https...)
         param_match = re.findall(r'(?:url|link|target|dest|destination|to|u)=((?:https?%3A%2F%2F|https?://)[^\s&"\']+)', html_text, re.IGNORECASE)
         for pm in param_match:
             unq = urllib.parse.unquote(pm)
@@ -1007,7 +1020,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, loading_card_payload)
 
-        # ---------------- BUNG TỆP VÀO THREAD ----------------
+        # ---------------- BUNG TỆP VÀO THREAD (NÉN CHUẨN HD 720P) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
         # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
@@ -1106,7 +1119,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TỐI ƯU HÓA BÓC TÁCH LINK RÚT GỌN BYVN & BOM.SO BẰNG CURL)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ NÂNG CẤP CHẤT LƯỢNG VIDEO HD 720P SẮC NÉT)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
