@@ -107,7 +107,7 @@ client = lark.Client.builder() \
     .build()
 
 # ----------------- HÀM TẠO BANNER THU NHỎ BẰNG 1/2 VÀ CĂN GIỮA -----------------
-def build_half_size_banner(img_key: str, alt_text: str = "Banner") -> list:
+def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
     if not img_key or img_key.startswith("DÁN_"):
         return []
     return [
@@ -455,7 +455,6 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = compress_and_convert_video(file_path, original_name=file_name)
                 
-                # CHỐNG LỖI 48B: Tuyệt đối không tải lên file rỗng hoặc nhỏ hơn 50KB
                 if not os.path.exists(send_path) or os.path.getsize(send_path) < 50000:
                     print(f"⚠️ Video {file_name} bị lỗi dữ liệu (< 50KB) -> Không đẩy file hỏng lên Lark!")
                     continue
@@ -501,29 +500,39 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK ĐA TẦNG CHO L1NK.DEV & ENCURTADOR -----------------
+# ----------------- 5. GIẢI MÃ LINK RÚT GỌN SIÊU TỐC QUA CURL & BÓC TÁCH ĐA TẦNG -----------------
 def extract_urls_from_text(raw_text: str) -> list:
     urls = []
     text = html.unescape(raw_text)
     text = urllib.parse.unquote(text)
     text = text.replace(r"\/", "/").replace(r"\u002f", "/").replace(r"\u002F", "/")
 
-    found = re.findall(r'(https?://(?:drive\.google\.com/[^\s"\'<>]+|[^"\'\s<>]+\.sharepoint\.com/[^\s"\'<>]+|[^"\'\s<>]+\.aliyuncs\.com/[^\s"\'<>]+))', text)
+    # 1. Quét link Drive / SharePoint / Cloud / File trực tiếp
+    found = re.findall(r'(https?://[^\s"\'<>]+)', text)
     for u in found:
         clean_u = u.split('"')[0].split("'")[0].split('\\')[0].rstrip(';>,.')
-        urls.append(clean_u)
+        if not any(ign in clean_u.lower() for ign in ["byvn.net", "bom.so", "l1nk.dev", "encurtador", "google.com/search", "facebook.com"]):
+            if any(k in clean_u.lower() for k in [
+                "drive.google.com", "sharepoint.com", "1drv.ms", "aliyuncs.com", "fptcloud.com", "tiktokcdn.com",
+                "byteoversea.com", ".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm"
+            ]):
+                urls.append(clean_u)
 
+    # 2. Giải mã Base64
     b64_candidates = re.findall(r'[A-Za-z0-9+/=]{16,}', raw_text)
     for c in b64_candidates:
         try:
             padded = c + "=" * ((4 - len(c) % 4) % 4)
             dec = base64.b64decode(padded).decode('utf-8', errors='ignore')
-            if any(k in dec for k in ["drive.google.com", "sharepoint", "aliyuncs", "http"]):
+            if any(k in dec for k in ["drive.google.com", "sharepoint", "aliyuncs", "fptcloud", "http"]):
                 dec_urls = re.findall(r'https?://[^\s"\'<>]+', dec)
-                urls.extend(dec_urls)
+                for du in dec_urls:
+                    if not any(ign in du.lower() for ign in ["byvn.net", "bom.so", "l1nk.dev"]):
+                        urls.append(du)
         except Exception:
             pass
 
+    # 3. Quét ID thư mục Google Drive
     folder_ids = re.findall(r'folders/([a-zA-Z0-9_-]{28,45})', text)
     for fid in folder_ids:
         urls.append(f"https://drive.google.com/drive/folders/{fid}")
@@ -531,71 +540,121 @@ def extract_urls_from_text(raw_text: str) -> list:
     return list(set(urls))
 
 def resolve_proof_url(url: str) -> str:
+    # 1. Link đã là file trực tiếp hoặc server cloud chính thức
     if any(k in url.lower() for k in [
         ".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm", ".avi", ".mkv",
         "aliyuncs.com", "oss-", "rc-upload", "tiktokcdn.com", "byteoversea.com", "fptcloud.com"
     ]):
         return url
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Upgrade-Insecure-Requests": "1"
-    }
-    cur_url = url
-
-    if "stream.aspx" in cur_url and "id=" in cur_url:
-        m = re.search(r'id=([^&]+)', cur_url)
+    # 2. Xử lý SharePoint
+    if "stream.aspx" in url and "id=" in url:
+        m = re.search(r'id=([^&]+)', url)
         if m:
             file_server_path = urllib.parse.unquote(m.group(1))
-            tenant_base = cur_url.split("/personal/")[0]
+            tenant_base = url.split("/personal/")[0]
             return f"{tenant_base}/personal/{file_server_path.split('/personal/')[1]}?download=1"
 
-    if "sharepoint.com" in cur_url or "1drv.ms" in cur_url:
-        sep = "&" if "?" in cur_url else "?"
-        if "download=1" not in cur_url:
-            return f"{cur_url}{sep}download=1"
+    if "sharepoint.com" in url or "1drv.ms" in url:
+        sep = "&" if "?" in url else "?"
+        if "download=1" not in url:
+            return f"{url}{sep}download=1"
         return url
 
-    for _ in range(4):
+    cur_url = url
+    print(f"🔍 Bắt đầu bóc tách link rút gọn: {cur_url}")
+
+    # 3. Sử dụng CURL để bắt link chuyển hướng (301/302) trong 0.5s mà không bị nghẽn
+    try:
+        cmd = [
+            "curl", "-s", "-L", "-o", "/dev/null", "-w", "%{url_effective}",
+            "--max-redirs", "10",
+            "--connect-timeout", "6",
+            "--max-time", "12",
+            "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            cur_url
+        ]
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        if p.returncode == 0 and p.stdout:
+            eff = p.stdout.strip()
+            if eff and eff.startswith("http") and eff != cur_url:
+                print(f"🔗 Curl đã theo dấu chuyển hướng: {eff}")
+                cur_url = eff
+                if not any(s in cur_url.lower() for s in ["byvn.net", "bom.so", "l1nk.dev", "encurtador.dev", "acesse.one"]):
+                    return cur_url
+    except Exception as e:
+        print(f"Lưu ý curl effective: {e}")
+
+    # 4. Nếu vẫn là trang chờ (splash/interstitial page), tải HTML để bóc tách sâu
+    html_text = ""
+    try:
+        cmd_body = [
+            "curl", "-s", "-L",
+            "--connect-timeout", "6",
+            "--max-time", "12",
+            "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            cur_url
+        ]
+        p_body = subprocess.run(cmd_body, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        if p_body.returncode == 0 and p_body.stdout:
+            html_text = p_body.stdout
+    except Exception:
+        pass
+
+    if not html_text:
         try:
-            r = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=12, verify=False)
-            if r.url != cur_url:
-                cur_url = r.url
-
-            if any(k in cur_url for k in ["drive.google.com", "sharepoint.com", "aliyuncs.com", ".mp4", ".mov", ".png", ".jpg"]):
-                return cur_url
-
-            found_urls = extract_urls_from_text(r.text)
-            for cand in found_urls:
-                if any(k in cand for k in ["drive.google.com", "sharepoint", "aliyuncs"]):
-                    print(f"🔗 Bóc tách thành công link đích ẩn: {cand}")
-                    return cand
-
-            dest_btn = re.search(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(?:[\s\S]*?(?:Go to destination|Chuyển tiếp|Download))', r.text, re.IGNORECASE)
-            if dest_btn:
-                btn_url = dest_btn.group(1)
-                if btn_url.startswith("http"):
-                    return btn_url
-
-            meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', r.text, re.IGNORECASE)
-            if meta_match:
-                cur_url = urllib.parse.urljoin(cur_url, meta_match.group(1))
-                continue
-
-            js_match = re.search(r'(?:window\.location(?:\.href)?|location\.replace)\s*=\s*["\']([^"\']+)["\']', r.text)
-            if js_match:
-                js_dest = js_match.group(1)
-                if js_dest.startswith("http"):
-                    cur_url = js_dest
-                    continue
-            break
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8"
+            }
+            r = requests.get(cur_url, headers=headers, timeout=10, verify=False, allow_redirects=True)
+            if r.url != cur_url and not any(s in r.url.lower() for s in ["byvn.net", "bom.so", "l1nk.dev", "encurtador.dev", "acesse.one"]):
+                return r.url
+            html_text = r.text
         except Exception:
-            break
+            pass
+
+    if html_text:
+        found_urls = extract_urls_from_text(html_text)
+        for cand in found_urls:
+            print(f"🔗 Bóc tách thành công link đích từ HTML: {cand}")
+            return cand
+
+        # Quét iframe
+        iframe_match = re.search(r'<iframe[^>]+src=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
+        if iframe_match:
+            if_src = iframe_match.group(1)
+            if if_src.startswith("http") and not any(s in if_src.lower() for s in ["byvn.net", "bom.so", "google.com/recaptcha"]):
+                return if_src
+
+        # Quét meta refresh
+        meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', html_text, re.IGNORECASE)
+        if meta_match:
+            dest = urllib.parse.urljoin(cur_url, meta_match.group(1))
+            if not any(s in dest.lower() for s in ["byvn.net", "bom.so"]):
+                return dest
+
+        # Quét javascript redirect
+        js_match = re.search(r'(?:window\.location(?:\.href)?|location\.replace|location\.assign|location\.href)\s*=\s*["\']([^"\']+)["\']', html_text)
+        if js_match:
+            dest = js_match.group(1).replace(r"\/", "/")
+            if dest.startswith("http") and not any(s in dest.lower() for s in ["byvn.net", "bom.so"]):
+                return dest
+
+        # Quét nút bấm tiếp tục / download / chuyển hướng
+        btn_match = re.search(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(?:[\s\S]*?(?:Go to destination|Chuyển tiếp|Download|Tiếp tục|Xem ngay|Tải xuống|Lấy link))', html_text, re.IGNORECASE)
+        if btn_match:
+            b_url = btn_match.group(1)
+            if b_url.startswith("http") and not any(s in b_url.lower() for s in ["byvn.net", "bom.so"]):
+                return b_url
+
+        # Quét URL query parameter (?url=https... hoặc ?target=https...)
+        param_match = re.findall(r'(?:url|link|target|dest|destination|to|u)=((?:https?%3A%2F%2F|https?://)[^\s&"\']+)', html_text, re.IGNORECASE)
+        for pm in param_match:
+            unq = urllib.parse.unquote(pm)
+            if not any(s in unq.lower() for s in ["byvn.net", "bom.so"]):
+                return unq
 
     return cur_url
 
@@ -850,7 +909,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                 remove_reaction_from_message(message_id, clock_rx_id)
 
             first_url = urls[0] if urls else ""
-            error_img_element = build_half_size_banner(BANNER_ERROR_KEY, "Banner Error")
+            error_img_element = build_half_size_banner(BANNER_ERROR_KEY, "Thông báo lỗi")
 
             if "sharepoint.com" in first_url or "1drv.ms" in first_url:
                 sharepoint_card = {
@@ -918,13 +977,12 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: HIỂN THỊ TẦN SUẤT LẶP LẠI (SỐ LẦN YÊU CẦU) ----------------
+        # ---------------- THẺ 1: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
         files_str = "\n".join(file_lines)
 
-        # Gắn thẻ tần suất lặp lại (màu cam nếu >= 2, màu xám nếu lần đầu)
         if req_count > 1:
             repeat_tag = f" <text_tag color='orange'>🔁 Yêu cầu lần {req_count}</text_tag>"
         else:
@@ -938,7 +996,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             f"{files_str}"
         )
 
-        card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "Banner Loading")
+        card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "Đang xử lý proof")
 
         loading_card_payload = {
             "elements": card1_img_element + [
@@ -949,17 +1007,17 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, loading_card_payload)
 
-        # ---------------- BUNG TỆP VÀO THREAD (KÈM BẢO VỆ CHỐNG TỆP HỎNG 48B) ----------------
+        # ---------------- BUNG TỆP VÀO THREAD ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): HIỂN THỊ TẦN SUẤT LẶP LẠI ----------------
+        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
         title_side_md = "<text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*{repeat_tag}"
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
-        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Banner Completed")
+        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Hoàn tất tải proof")
 
         finish_card_payload = {
             "elements": card2_img_element + [
@@ -1048,7 +1106,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TÍCH HỢP HIỂN THỊ TẦN SUẤT LẶP LẠI VÀO CẢ 2 THẺ)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TỐI ƯU HÓA BÓC TÁCH LINK RÚT GỌN BYVN & BOM.SO BẰNG CURL)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
