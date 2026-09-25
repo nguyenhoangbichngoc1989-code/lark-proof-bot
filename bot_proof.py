@@ -89,7 +89,7 @@ BANNER_CARD1_KEY = "img_v3_0215r_61dad065-35d7-45ba-a33d-6ab073a717ah"      # Th
 BANNER_ERROR_KEY = "img_v3_0215r_6e344d17-b29f-4de6-a147-177aa11fa62h"      # Thẻ Báo Lỗi / Cảnh Báo
 BANNER_COMPLETED_KEY = "img_v3_0215r_124a0bca-2990-426a-8cf2-c72aeadb7fdh"  # Thẻ 2: Hoàn Tất
 
-FOOTER_RAIN_TEXT = "**<text_tag color='indigo'>🌧️ ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...🌧️</text_tag>**"
+FOOTER_RAIN_TEXT = "🌧️ **<text_tag color='indigo'>ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...</text_tag>** 🌧️"
 
 PROCESSED_MESSAGES = set()
 
@@ -566,7 +566,6 @@ def extract_urls_from_text(raw_text: str) -> list:
 def resolve_proof_url(url: str) -> str:
     u_clean = url.strip()
     
-    # 🌟 Ánh xạ trực tiếp các link rút gọn quen thuộc (Diev, Ib2L, Kkqd, bit.ly)
     if "byvn.net/Diev" in u_clean:
         return "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1790139814764-37?spm=a1zb9.8233112.0.0.54d63a88mQqBDh"
     if "byvn.net/Ib2L" in u_clean:
@@ -777,7 +776,6 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
     folder_id = folder_match.group(1) if folder_match else ""
     clean_url = f"https://drive.google.com/drive/folders/{folder_id}" if folder_id else folder_url.split("?")[0]
 
-    # 1. Thử tải nhanh qua gdown download_folder
     try:
         import gdown
         downloaded = gdown.download_folder(clean_url, output=target_dir, quiet=False, use_cookies=False)
@@ -787,9 +785,8 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
     except Exception as e:
         print(f"Lỗi gdown download_folder: {e}")
 
-    # 2. Fallback quét HTML tìm toàn bộ ảnh & video bên trong thư mục
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*"
     }
     try:
@@ -1038,7 +1035,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA (TAG LOADING ĐỎ HỒNG) ----------------
+        # ---------------- THẺ 1: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA (TAG ⌛Lᴏᴀᴅɪɴɢ... ĐỎ) ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -1050,7 +1047,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             repeat_tag = " <text_tag color='grey'>🔁 Lần 1</text_tag>"
 
         header_block = (
-            f"<text_tag color='carmine'>Loading....</text_tag>\n\n"
+            f"**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ...</text_tag>**\n\n"
             f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>{repeat_tag}\n"
             f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
             f"         ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
@@ -1058,7 +1055,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             f"{files_str}"
         )
 
-        card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "Loading....")
+        card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
 
         loading_card_payload = {
             "elements": card1_img_element + [
@@ -1072,14 +1069,14 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- BUNG TỆP VÀO THREAD (ĐÃ BẢO ĐẢM NÉN VỀ DƯỚI 50MB LARK CHO TỆP ĐẾN 500MB) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 (TAG COMPLETED XANH NGỌC) ----------------
-        title_side_md = "<text_tag color='turquoise'>Completed</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
+        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 (TAG ・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ XANH NGỌC) ----------------
+        title_side_md = "**<text_tag color='turquoise'>・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*{repeat_tag}"
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
-        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Completed")
+        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
 
         finish_card_payload = {
             "elements": card2_img_element + [
@@ -1100,14 +1097,9 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, finish_card_payload)
 
-        # ---------------- 🐍 ĐỔI TỪ ĐỒNG HỒ SANG BÉ RẮN KHI HOÀN TẤT ----------------
+        # ---------------- GỠ REACTION ĐỒNG HỒ KHI HOÀN TẤT ----------------
         if clock_rx_id:
             remove_reaction_from_message(message_id, clock_rx_id)
-
-        if actual_bung_success > 0:
-            add_reaction_to_message(message_id, "KeepYourSpiritsAwake")
-        else:
-            print(f"⚠️ Bung được ({actual_bung_success}/{len(final_files)}) media hợp lệ")
 
         shutil.rmtree(task_temp_dir, ignore_errors=True)
         gc.collect()
@@ -1168,7 +1160,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ TÍCH HỢP TOÀN DIỆN BIT.LY & FOLDER GOOGLE DRIVE)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
