@@ -180,7 +180,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def sanitize_filename(filename: str) -> str:
@@ -218,12 +218,6 @@ def reply_thread_card(message_id: str, card_content: dict):
 
 # ----------------- HÀM NÉN VIDEO CỐ ĐỊNH BITRATE (BẢO ĐẢM XUẤT 6MB - 14MB, DƯỚI 50MB LARK) -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
-    """
-    Nén video khống chế trần bitrate (b:v 750k, maxrate 950k):
-    - Đảm bảo video dài đến đâu cũng luôn nằm gọn từ 6MB - 14MB (dưới trần 50MB Lark)
-    - eq=contrast=1.15: tăng tương phản đọc rõ nét số AWB và barcode
-    - 1 thread: bảo vệ RAM Render < 100MB
-    """
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
             return file_path
@@ -231,7 +225,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         ext = os.path.splitext(file_path)[1].lower()
 
-        # Nếu file đã là MP4 nhẹ <= 20MB thì giữ nguyên gửi luôn
         if ext == ".mp4" and size_mb <= 20.0 and not any(k in file_path.lower() for k in ["raw_", "tmp_"]):
             return file_path
 
@@ -245,7 +238,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         temp_out = os.path.join(dir_name, f"tmp_fast_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
-        # Bộ lọc chuẩn: scale tối đa 854px, làm chẵn điểm ảnh, tương phản quang học AWB
         vf_filter = "scale=w=854:h=854:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15,eq=contrast=1.15"
 
         cmd = [
@@ -266,7 +258,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
 
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 50000:
             out_mb = os.path.getsize(temp_out) / (1024 * 1024)
-            print(f"⚡ Đã nén video theo chuẩn bitrate: {clean_base}.mp4 ({out_mb:.2f} MB)")
+            print(f"⚡ Đã nén video an toàn thành công: {clean_base}.mp4 ({out_mb:.2f} MB)")
             
             try:
                 if os.path.exists(final_mp4) and final_mp4 != temp_out:
@@ -331,7 +323,6 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
 
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
-        # Mọi video > 20MB hoặc tệp chưa chuẩn MP4 đều đưa vào xử lý nén
         if is_webm or ext in [".webm", ".mov", ".avi", ".mkv"] or (is_video and (ext != ".mp4" or size_mb > 20.0)):
             return compress_video_to_safe_mp4(file_path)
 
@@ -450,7 +441,6 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
 
                 size_mb = os.path.getsize(send_path) / (1024 * 1024)
                 file_key = ""
-                # Hạn mức trần dưới 48MB (an toàn ngưỡng 50MB của Lark)
                 if size_mb <= 48.0:
                     file_key = upload_lark_file(send_path, "stream") or upload_lark_file(send_path, "mp4")
 
@@ -653,7 +643,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     }
     real_title = preferred_name or extract_gdrive_title(file_id)
 
-    # 1. Thử tải trực tiếp qua drive.usercontent.google.com với confirm=t
     try:
         direct_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
         res = global_session.get(direct_url, headers=headers, stream=True, verify=False, timeout=(25, 360))
@@ -663,7 +652,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"Lỗi tải trực tiếp usercontent: {e}")
 
-    # 2. Qua uc?export=download và phân tích toàn diện trang xác nhận vi-rút
     try:
         init_url = f"https://drive.google.com/uc?export=download&id={file_id}"
         res = global_session.get(init_url, headers=headers, stream=True, verify=False, timeout=40)
@@ -724,7 +712,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"Lỗi tải Drive qua uc: {e}")
 
-    # 3. Dự phòng bằng gdown
     try:
         import gdown
         clean_save_name = sanitize_filename(real_title or f"gdrive_{file_id}.mp4")
@@ -780,7 +767,6 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 def download_proof(url: str, target_dir: str) -> bool:
     final_url = resolve_proof_url(url)
     
-    # 1. Nếu là link Google Drive
     if any(k in final_url for k in ["drive.google.com", "drive.usercontent.google.com", "docs.google.com"]):
         if "/folders/" in final_url:
             return download_gdrive_folder(final_url, target_dir)
@@ -789,10 +775,9 @@ def download_proof(url: str, target_dir: str) -> bool:
             if match:
                 return download_single_gdrive_file(match.group(1), target_dir)
 
-    # 2. Tải trực tiếp từ FPT Cloud S3 hoặc các server media (nâng timeout lên 360 giây cho tệp đến 200MB)
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "*/*"
         }
         res = global_session.get(final_url, headers=headers, stream=True, timeout=(25, 360), verify=False)
@@ -992,7 +977,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
+        # ---------------- THẺ 1: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA (HIỂN THỊ TAG LOADING ĐỎ HỒNG) ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -1004,6 +989,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             repeat_tag = " <text_tag color='grey'>🔁 Lần 1</text_tag>"
 
         header_block = (
+            f"<text_tag color='carmine'>Loading....</text_tag>\n\n"
             f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>{repeat_tag}\n"
             f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
             f"         ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
@@ -1011,7 +997,8 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             f"{files_str}"
         )
 
-        card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "Đang tải dữ liệu")
+        # Chuyển đổi alt_text thành "Loading...." để tóm tắt ngoài luồng thread hiển thị đúng chữ
+        card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "Loading....")
 
         loading_card_payload = {
             "elements": card1_img_element + [
@@ -1025,14 +1012,16 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- BUNG TỆP VÀO THREAD (ĐÃ BẢO ĐẢM NÉN VỀ DƯỚI 50MB LARK) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
-        title_side_md = "<text_tag color='turquoise'>ᴄᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
+        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 (HIỂN THỊ TAG COMPLETED XANH NGỌC) ----------------
+        # Chuyển đổi tiêu đề thành tag Completed màu xanh ngọc (turquoise)
+        title_side_md = "<text_tag color='turquoise'>Completed</text_tag>\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*{repeat_tag}"
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
-        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Hoàn tất")
+        # Chuyển đổi alt_text thành "Completed" để tóm tắt ngoài luồng thread hiển thị đúng chữ
+        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Completed")
 
         finish_card_payload = {
             "elements": card2_img_element + [
@@ -1121,7 +1110,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ CỐ ĐỊNH TRẦN BITRATE 750K/950K & TỐI ƯU TRẦN 50MB LARK)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ CẬP NHẬT TAG TEXT LOADING & COMPLETED)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
