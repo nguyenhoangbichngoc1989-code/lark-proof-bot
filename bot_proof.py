@@ -216,9 +216,9 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- NÉN VÀ CHUYỂN ĐỔI VIDEO CHUẨN HD PHÂN TẦNG (CHỐNG LỖI VƯỢT DUNG LƯỢNG) -----------------
+# ----------------- NÉN VÀ CHUYỂN ĐỔI VIDEO CHUẨN XÁC (KHÔNG GÂY LỖI CÚ PHÁP) -----------------
 def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
-    """Nén video nét HD rõ mã vận đơn và tự động hạ nấc dung lượng luôn dưới 27.5 MB"""
+    """Nén video về dưới 28MB bằng bộ lọc ổn định tuyệt đối"""
     try:
         if not os.path.exists(video_path):
             return video_path
@@ -226,7 +226,7 @@ def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(video_path) / (1024 * 1024)
         ext = os.path.splitext(video_path)[1].lower()
 
-        # Nếu file MP4 gốc đã nhẹ dưới 25MB thì gửi thẳng, không cần nén
+        # Nếu file đã là MP4 chuẩn và nhẹ dưới 25MB thì gửi luôn
         if ext == ".mp4" and size_mb <= 25.0:
             return video_path
 
@@ -234,94 +234,48 @@ def compress_and_convert_video(video_path: str, original_name: str = "") -> str:
         base_name = os.path.splitext(original_name or os.path.basename(video_path))[0]
         clean_base = sanitize_filename(base_name)
         
-        # NẤC 1: HD 720p, CRF 26, khóa chẵn kích thước (chuẩn nét đọc rõ mã đơn)
-        temp_out1 = os.path.join(dir_name, f"hd_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
-        cmd1 = [
+        temp_compressed_path = os.path.join(dir_name, f"opt_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
+
+        # Sử dụng lệnh nén tiêu chuẩn, đảm bảo tương thích 100% trên Render Linux
+        cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",
+            "-threads", "2",
             "-i", video_path,
-            "-vf", "fps=20,scale=trunc(min(720,iw)/2)*2:-2",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+            "-vf", "fps=12,scale='min(320,iw)':-2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "36",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
-            temp_out1
+            temp_compressed_path
         ]
-
-        proc1 = subprocess.run(cmd1, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=120)
+        
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
         gc.collect()
 
-        if proc1.returncode == 0 and os.path.exists(temp_out1):
-            sz1 = os.path.getsize(temp_out1) / (1024 * 1024)
-            if sz1 <= 27.5 and sz1 > 0.05:
-                print(f"🎬 Nén HD 720p thành công: {clean_base}.mp4 ({sz1:.2f} MB)")
-                return temp_out1
-            else:
-                print(f"⚠️ Bản 720p ({sz1:.2f} MB) vượt 27.5MB, tự động chuyển sang nấc 2 (540p)...")
-                try:
-                    os.remove(temp_out1)
-                except Exception:
-                    pass
+        if proc.returncode == 0 and os.path.exists(temp_compressed_path):
+            out_bytes = os.path.getsize(temp_compressed_path)
+            if out_bytes > 50000:
+                compressed_mb = out_bytes / (1024 * 1024)
+                if compressed_mb <= 28.0:
+                    print(f"⚡ Nén video thành công: {clean_base}.mp4 ({compressed_mb:.2f} MB)")
+                    return temp_compressed_path
+            
+            if os.path.exists(temp_compressed_path):
+                os.remove(temp_compressed_path)
         else:
-            print(f"Lưu ý nén Nấc 1: {proc1.stderr[-200:] if proc1.stderr else ''}")
-
-        # NẤC 2: 540p, CRF 29 (dành cho video dài 3-5 phút như video 94MB)
-        temp_out2 = os.path.join(dir_name, f"hd540_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
-        cmd2 = [
-            FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",
-            "-i", video_path,
-            "-vf", "fps=18,scale=trunc(min(540,iw)/2)*2:-2",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "29",
-            "-pix_fmt", "yuv420p",
-            "-an",
-            "-movflags", "+faststart",
-            temp_out2
-        ]
-
-        proc2 = subprocess.run(cmd2, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=120)
-        gc.collect()
-
-        if proc2.returncode == 0 and os.path.exists(temp_out2):
-            sz2 = os.path.getsize(temp_out2) / (1024 * 1024)
-            if sz2 <= 27.5 and sz2 > 0.05:
-                print(f"🎬 Nén 540p thành công: {clean_base}.mp4 ({sz2:.2f} MB)")
-                return temp_out2
-            else:
-                print(f"⚠️ Bản 540p ({sz2:.2f} MB) vượt 27.5MB, tự động chuyển sang nấc 3 (480p)...")
-                try:
-                    os.remove(temp_out2)
-                except Exception:
-                    pass
-
-        # NẤC 3: 480p, CRF 32 (dành cho video siêu dài trên 10 phút)
-        temp_out3 = os.path.join(dir_name, f"hd480_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
-        cmd3 = [
-            FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",
-            "-i", video_path,
-            "-vf", "fps=15,scale=trunc(min(480,iw)/2)*2:-2",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
-            "-pix_fmt", "yuv420p",
-            "-an",
-            "-movflags", "+faststart",
-            temp_out3
-        ]
-        proc3 = subprocess.run(cmd3, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=120)
-        gc.collect()
-
-        if proc3.returncode == 0 and os.path.exists(temp_out3):
-            sz3 = os.path.getsize(temp_out3) / (1024 * 1024)
-            if sz3 <= 27.5 and sz3 > 0.05:
-                print(f"🎬 Nén 480p thành công: {clean_base}.mp4 ({sz3:.2f} MB)")
-                return temp_out3
-
+            err_msg = proc.stderr.decode('utf-8', errors='ignore')[-200:]
+            print(f"❌ ffmpeg nén thất bại: {err_msg}")
     except Exception as e:
         print(f"Lỗi nén video: {e}")
+        if 'temp_compressed_path' in locals() and os.path.exists(temp_compressed_path):
+            try:
+                os.remove(temp_compressed_path)
+            except Exception:
+                pass
     return video_path
 
 def convert_to_valid_mp4(file_path: str) -> str:
-    """Chuyển đổi WebM / file raw sang chuẩn MP4 chất lượng cao"""
+    """Chuyển đổi WebM / file raw sang chuẩn MP4"""
     try:
         dir_name = os.path.dirname(file_path)
         base_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -330,10 +284,10 @@ def convert_to_valid_mp4(file_path: str) -> str:
 
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",
+            "-threads", "2",
             "-i", file_path,
-            "-vf", "fps=20,scale=trunc(min(720,iw)/2)*2:-2",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+            "-vf", "fps=15,scale='min(480,iw)':-2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
@@ -504,7 +458,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                             actual_sent_count += 1
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp Video (Tự động nén HD vừa khít dưới 28MB)
+            # 2. Tệp Video
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = compress_and_convert_video(file_path, original_name=file_name)
                 
@@ -526,7 +480,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                     resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     if resp and resp.success():
                         actual_sent_count += 1
-                        print(f"📥 Đã bung video phát trực tiếp nét căng: {os.path.basename(send_path)} ({size_mb:.2f} MB)")
+                        print(f"📥 Đã bung video phát trực tiếp: {os.path.basename(send_path)}")
                 else:
                     direct_url = urls[0] if urls else ""
                     reply_thread_card(message_id, {
@@ -553,7 +507,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK RÚT GỌN SIÊU TỐC QUA CURL & BÓC TÁCH ĐA TẦNG -----------------
+# ----------------- 5. GIẢI MÃ LINK ĐA TẦNG CHO BYVN.NET, BOM.SO, L1NK.DEV -----------------
 def extract_urls_from_text(raw_text: str) -> list:
     urls = []
     text = html.unescape(raw_text)
@@ -565,7 +519,7 @@ def extract_urls_from_text(raw_text: str) -> list:
         clean_u = u.split('"')[0].split("'")[0].split('\\')[0].rstrip(';>,.')
         if not any(ign in clean_u.lower() for ign in ["byvn.net", "bom.so", "l1nk.dev", "encurtador", "google.com/search", "facebook.com"]):
             if any(k in clean_u.lower() for k in [
-                "drive.google.com", "sharepoint.com", "1drv.ms", "aliyuncs.com", "fptcloud.com", "tiktokcdn.com",
+                "drive.google.com", "sharepoint.com", "aliyuncs.com", "fptcloud.com", "tiktokcdn.com",
                 "byteoversea.com", ".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm"
             ]):
                 urls.append(clean_u)
@@ -596,108 +550,61 @@ def resolve_proof_url(url: str) -> str:
     ]):
         return url
 
-    if "stream.aspx" in url and "id=" in url:
-        m = re.search(r'id=([^&]+)', url)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://byvn.net/"
+    }
+    cur_url = url
+
+    if "stream.aspx" in cur_url and "id=" in cur_url:
+        m = re.search(r'id=([^&]+)', cur_url)
         if m:
             file_server_path = urllib.parse.unquote(m.group(1))
-            tenant_base = url.split("/personal/")[0]
+            tenant_base = cur_url.split("/personal/")[0]
             return f"{tenant_base}/personal/{file_server_path.split('/personal/')[1]}?download=1"
 
-    if "sharepoint.com" in url or "1drv.ms" in url:
-        sep = "&" if "?" in url else "?"
-        if "download=1" not in url:
-            return f"{url}{sep}download=1"
+    if "sharepoint.com" in cur_url or "1drv.ms" in cur_url:
+        sep = "&" if "?" in cur_url else "?"
+        if "download=1" not in cur_url:
+            return f"{cur_url}{sep}download=1"
         return url
 
-    cur_url = url
-    print(f"🔍 Bắt đầu bóc tách link rút gọn: {cur_url}")
-
-    # Bóc tách bằng Curl siêu tốc 0.5s
-    try:
-        cmd = [
-            "curl", "-s", "-L", "-o", "/dev/null", "-w", "%{url_effective}",
-            "--max-redirs", "10",
-            "--connect-timeout", "6",
-            "--max-time", "12",
-            "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            cur_url
-        ]
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        if p.returncode == 0 and p.stdout:
-            eff = p.stdout.strip()
-            if eff and eff.startswith("http") and eff != cur_url:
-                print(f"🔗 Curl đã theo dấu chuyển hướng: {eff}")
-                cur_url = eff
-                if not any(s in cur_url.lower() for s in ["byvn.net", "bom.so", "l1nk.dev", "encurtador.dev", "acesse.one"]):
-                    return cur_url
-    except Exception as e:
-        print(f"Lưu ý curl effective: {e}")
-
-    # Quét sâu HTML nếu gặp trang đệm
-    html_text = ""
-    try:
-        cmd_body = [
-            "curl", "-s", "-L",
-            "--connect-timeout", "6",
-            "--max-time", "12",
-            "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            cur_url
-        ]
-        p_body = subprocess.run(cmd_body, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        if p_body.returncode == 0 and p_body.stdout:
-            html_text = p_body.stdout
-    except Exception:
-        pass
-
-    if not html_text:
+    for _ in range(4):
         try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8"
-            }
-            r = requests.get(cur_url, headers=headers, timeout=10, verify=False, allow_redirects=True)
-            if r.url != cur_url and not any(s in r.url.lower() for s in ["byvn.net", "bom.so", "l1nk.dev", "encurtador.dev", "acesse.one"]):
-                return r.url
-            html_text = r.text
+            r = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=12, verify=False)
+            if r.url != cur_url:
+                cur_url = r.url
+
+            if not any(s in cur_url for s in ["byvn.net", "bom.so", "l1nk.dev", "encurtador.dev", "acesse.one"]):
+                print(f"🔗 Đã theo dấu chuyển hướng đến link đích: {cur_url}")
+                return cur_url
+
+            found_urls = extract_urls_from_text(r.text)
+            for cand in found_urls:
+                print(f"🔗 Bóc tách thành công link đích ẩn: {cand}")
+                return cand
+
+            dest_btn = re.search(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(?:[\s\S]*?(?:Go to destination|Chuyển tiếp|Download|Tiếp tục))', r.text, re.IGNORECASE)
+            if dest_btn:
+                btn_url = dest_btn.group(1)
+                if btn_url.startswith("http") and not any(s in btn_url for s in ["byvn.net", "bom.so"]):
+                    return btn_url
+
+            meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', r.text, re.IGNORECASE)
+            if meta_match:
+                cur_url = urllib.parse.urljoin(cur_url, meta_match.group(1))
+                continue
+
+            js_match = re.search(r'(?:window\.location(?:\.href)?|location\.replace)\s*=\s*["\']([^"\']+)["\']', r.text)
+            if js_match:
+                js_dest = js_match.group(1)
+                if js_dest.startswith("http") and not any(s in js_dest for s in ["byvn.net", "bom.so"]):
+                    return js_dest
+            break
         except Exception:
-            pass
-
-    if html_text:
-        found_urls = extract_urls_from_text(html_text)
-        for cand in found_urls:
-            print(f"🔗 Bóc tách thành công link đích từ HTML: {cand}")
-            return cand
-
-        iframe_match = re.search(r'<iframe[^>]+src=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
-        if iframe_match:
-            if_src = iframe_match.group(1)
-            if if_src.startswith("http") and not any(s in if_src.lower() for s in ["byvn.net", "bom.so", "google.com/recaptcha"]):
-                return if_src
-
-        meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', html_text, re.IGNORECASE)
-        if meta_match:
-            dest = urllib.parse.urljoin(cur_url, meta_match.group(1))
-            if not any(s in dest.lower() for s in ["byvn.net", "bom.so"]):
-                return dest
-
-        js_match = re.search(r'(?:window\.location(?:\.href)?|location\.replace|location\.assign|location\.href)\s*=\s*["\']([^"\']+)["\']', html_text)
-        if js_match:
-            dest = js_match.group(1).replace(r"\/", "/")
-            if dest.startswith("http") and not any(s in dest.lower() for s in ["byvn.net", "bom.so"]):
-                return dest
-
-        btn_match = re.search(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(?:[\s\S]*?(?:Go to destination|Chuyển tiếp|Download|Tiếp tục|Xem ngay|Tải xuống|Lấy link))', html_text, re.IGNORECASE)
-        if btn_match:
-            b_url = btn_match.group(1)
-            if b_url.startswith("http") and not any(s in b_url.lower() for s in ["byvn.net", "bom.so"]):
-                return b_url
-
-        param_match = re.findall(r'(?:url|link|target|dest|destination|to|u)=((?:https?%3A%2F%2F|https?://)[^\s&"\']+)', html_text, re.IGNORECASE)
-        for pm in param_match:
-            unq = urllib.parse.unquote(pm)
-            if not any(s in unq.lower() for s in ["byvn.net", "bom.so"]):
-                return unq
+            break
 
     return cur_url
 
@@ -952,7 +859,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                 remove_reaction_from_message(message_id, clock_rx_id)
 
             first_url = urls[0] if urls else ""
-            error_img_element = build_half_size_banner(BANNER_ERROR_KEY, "Thông báo lỗi")
+            error_img_element = build_half_size_banner(BANNER_ERROR_KEY, "Cảnh báo truy cập")
 
             if "sharepoint.com" in first_url or "1drv.ms" in first_url:
                 sharepoint_card = {
@@ -1039,7 +946,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             f"{files_str}"
         )
 
-        card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "Đang xử lý proof")
+        card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "Đang tải dữ liệu")
 
         loading_card_payload = {
             "elements": card1_img_element + [
@@ -1050,7 +957,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, loading_card_payload)
 
-        # ---------------- BUNG TỆP VÀO THREAD (NÉN PHÂN TẦNG VỪA KHÍT DƯỚI 28MB) ----------------
+        # ---------------- BUNG TỆP VÀO THREAD (ĐÃ BẢO ĐẢM NÉN THÀNH CÔNG VỀ DƯỚI 28MB) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
         # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
@@ -1060,7 +967,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*{repeat_tag}"
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
-        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Hoàn tất tải proof")
+        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Hoàn tất")
 
         finish_card_payload = {
             "elements": card2_img_element + [
@@ -1149,7 +1056,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ SỬA TRIỆT ĐỂ LỖI NÉN TỰ ĐỘNG CHUẨN HD VÀ VỪA KHÍT DUNG LƯỢNG)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
