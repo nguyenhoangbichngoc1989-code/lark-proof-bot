@@ -89,20 +89,6 @@ BANNER_CARD1_KEY = "img_v3_0215r_61dad065-35d7-45ba-a33d-6ab073a717ah"      # Th
 BANNER_ERROR_KEY = "img_v3_0215r_6e344d17-b29f-4de6-a147-177aa11fa62h"      # Thẻ Báo Lỗi / Cảnh Báo
 BANNER_COMPLETED_KEY = "img_v3_0215r_124a0bca-2990-426a-8cf2-c72aeadb7fdh"  # Thẻ 2: Hoàn Tất
 
-# 🌟 FOOTER TRỜI MƯA CĂN GIỮA - CHỮ TO HƠN - MÀU WATHET
-FOOTER_RAIN_MD = "### 🌧️ <text_tag color='wathet'>**ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...**</text_tag> 🌧️"
-
-def build_footer_rain_element() -> dict:
-    """Tạo khối footer trời mưa căn chính giữa thẻ, chữ to và tag màu wathet"""
-    return {
-        "tag": "div",
-        "text": {
-            "tag": "lark_md",
-            "content": FOOTER_RAIN_MD
-        },
-        "text_align": "center"
-    }
-
 PROCESSED_MESSAGES = set()
 
 global_session = requests.Session()
@@ -157,9 +143,9 @@ def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
         }
     ]
 
-# ----------------- HÀM TẠO 2 ĐIỂM NHẤN TRÊN THẺ (CALLOUT BOX & PILL TAG) -----------------
+# ----------------- HÀM TẠO CÁC KHỐI ĐIỂM NHẤN TRÊN THẺ -----------------
 def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
-    """Tạo khung điểm nhấn trên (Callout Box bo góc nền màu nổi bật, chữ không bao giờ bị mất)"""
+    """Tạo khung điểm nhấn trên (Callout Box bo góc nền màu chuẩn Lark)"""
     return {
         "tag": "column_set",
         "flex_mode": "none",
@@ -182,12 +168,69 @@ def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
 def build_pill_tag(content_text: str) -> dict:
     """Tạo tag điểm nhấn dưới dạng viên thuốc bo tròn căn giữa thẻ (đã lược bỏ emoji)"""
     return {
-        "tag": "div",
-        "text": {
-            "tag": "lark_md",
-            "content": f"<text_tag color='grey'>{content_text}</text_tag>"
-        },
-        "text_align": "center"
+        "tag": "column_set",
+        "flex_mode": "none",
+        "background_style": "default",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [{"tag": "markdown", "content": " "}]
+            },
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 2,
+                "elements": [
+                    {
+                        "tag": "markdown",
+                        "content": f"<text_tag color='grey'>{content_text}</text_tag>"
+                    }
+                ]
+            },
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [{"tag": "markdown", "content": " "}]
+            }
+        ]
+    }
+
+# 🌟 FOOTER DƯỚI CÙNG: MƯA BÊN TRÁI - TAG SỐ LẦN ĐẾM BÊN PHẢI
+def build_footer_element(repeat_tag_str: str = "") -> dict:
+    """Tạo footer dưới cùng: thời tiết mưa bên trái, số lần đếm ở góc phải thẻ"""
+    columns = [
+        {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 3,
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": "🌧️ <text_tag color='wathet'>**ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...**</text_tag> 🌧️"
+                }
+            ]
+        }
+    ]
+    if repeat_tag_str:
+        columns.append({
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": repeat_tag_str
+                }
+            ]
+        })
+    return {
+        "tag": "column_set",
+        "flex_mode": "none",
+        "background_style": "default",
+        "columns": columns
     }
 
 # ----------------- 3. QUẢN LÝ LỊCH SỬ & ĐẾM TẦN SUẤT LẶP LẠI -----------------
@@ -285,7 +328,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         temp_out = os.path.join(dir_name, f"tmp_hd_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
-        # Nấc 1: Chuẩn nét HD 720p tối ưu cho video lớn
         vf_hd = "scale=w=1280:h=1280:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=20,eq=contrast=1.15"
 
         cmd_hd = [
@@ -321,7 +363,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
                 if os.path.exists(temp_out):
                     os.remove(temp_out)
 
-        # Nấc 2 dự phòng an toàn cho video thời lượng rất dài
         vf_safe = "scale=w=854:h=854:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
         cmd_safe = [
             FFMPEG_EXEC, "-y", "-nostdin",
@@ -381,11 +422,9 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
             with open(file_path, "rb") as f:
                 header = f.read(128)
 
-            # 1. Nhận diện tệp PDF chuẩn xác
             if header.startswith(b"%PDF"):
                 is_pdf = True
                 suggested_ext = ".pdf"
-            # 2. Nhận diện tệp Ảnh
             elif header.startswith(b"\xff\xd8\xff"):
                 is_image = True
                 suggested_ext = ".jpg"
@@ -398,7 +437,6 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
             elif header.startswith(b"RIFF") and b"WEBP" in header[8:16]:
                 is_image = True
                 suggested_ext = ".webp"
-            # 3. Nhận diện Video
             elif header.startswith(b"\x1a\x45\xdf\xa3"):
                 is_video = True
                 is_webm = True
@@ -410,7 +448,6 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
                 is_video = True
                 suggested_ext = ".mp4"
 
-        # Nếu là tệp PDF: Đảm bảo đuôi tệp luôn là .pdf và không bao giờ chuyển sang video
         if is_pdf or ext == ".pdf":
             if ext != ".pdf":
                 new_path = os.path.join(dir_name, f"{name}.pdf")
@@ -419,7 +456,6 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
                 return new_path
             return file_path
 
-        # Nếu là tệp Ảnh: Gắn đúng đuôi ảnh
         if is_image or ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic"]:
             if ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic"]:
                 new_ext = suggested_ext or ".jpg"
@@ -429,7 +465,6 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
                 return new_path
             return file_path
 
-        # Nếu là Video:
         if ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp", ".ts"]:
             is_video = True
 
@@ -524,7 +559,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
         file_name = f["name"]
 
         try:
-            # 1. Hình ảnh: .jpg, .jpeg, .png, .webp, .gif
+            # 1. Hình ảnh
             if file_ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".jfif", ".svg", ".tiff"]:
                 with open(file_path, "rb") as img_f:
                     create_req = CreateImageRequest.builder() \
@@ -539,7 +574,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                             actual_sent_count += 1
                             print(f"✅ Đã gửi ảnh: {file_name}")
 
-            # 2. Tệp PDF: bung trực tiếp tệp PDF vào thread
+            # 2. Tệp PDF
             elif file_ext == ".pdf":
                 if os.path.getsize(file_path) / (1024 * 1024) <= 48.0:
                     file_key = upload_lark_file(file_path, "pdf") or upload_lark_file(file_path, "stream")
@@ -550,7 +585,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                             actual_sent_count += 1
                             print(f"📄 Đã bung tệp PDF vào thread: {file_name}")
 
-            # 3. Tệp Video: .mp4, .mov, .webm,...
+            # 3. Tệp Video
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = f["path"]
                 if os.path.getsize(send_path) / (1024 * 1024) > 20.0:
@@ -584,7 +619,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                             ]
                         })
 
-            # 4. Tệp tài liệu khác
+            # 4. Tệp khác
             else:
                 if os.path.getsize(file_path) / (1024 * 1024) <= 48.0:
                     file_key = upload_lark_file(file_path, "stream")
@@ -1065,7 +1100,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                             )
                         },
                         {"tag": "hr"},
-                        build_footer_rain_element()
+                        build_footer_element()
                     ]
                 }
                 reply_thread_card(message_id, sharepoint_card)
@@ -1074,7 +1109,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                     "elements": error_img_element + [
                         {"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"},
                         {"tag": "hr"},
-                        build_footer_rain_element()
+                        build_footer_element()
                     ]
                 })
             shutil.rmtree(task_temp_dir, ignore_errors=True)
@@ -1118,20 +1153,21 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: BANNER THU NHỎ 1/2, KHỐI NỀN CARMINE & CHỮ ĐỎ HỒNG ĐẬM ----------------
+        # ---------------- THIẾT LẬP TAG ĐẾM SỐ LẦN ----------------
+        if req_count > 1:
+            repeat_tag = f"<text_tag color='orange'>🔁 Yêu cầu lần {req_count}</text_tag>"
+        else:
+            repeat_tag = "<text_tag color='blue'>🔁 Lần 1</text_tag>"
+
+        # ---------------- THẺ 1: BANNER 1/2, KHỐI NỀN CARMINE ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
         files_str = "\n".join(file_lines)
 
-        if req_count > 1:
-            repeat_tag = f" <text_tag color='orange'>🔁 Yêu cầu lần {req_count}</text_tag>"
-        else:
-            repeat_tag = " <text_tag color='grey'>🔁 Lần 1</text_tag>"
-
         header_block = (
             f"**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ...</text_tag>**\n\n"
-            f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>{repeat_tag}\n"
+            f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
             f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
             f"         ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
             f"{summary_group_str}\n\n"
@@ -1139,8 +1175,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
-        # Khối Callout Box nền carmine, chữ đỏ hồng đậm carmine
-        card1_top_highlight = build_highlight_box("<font color='carmine'><b>[FingerHeart] 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; </b></font>", bg_style="carmine")
+        card1_top_highlight = build_highlight_box("<font color='white'><b>😆 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; </b></font>", bg_style="carmine")
         card1_bottom_highlight = build_pill_tag("⌛Lᴏᴀᴅɪɴɢ...")
 
         loading_card_payload = {
@@ -1149,24 +1184,25 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                 {"tag": "markdown", "content": header_block},
                 card1_bottom_highlight,
                 {"tag": "hr"},
-                build_footer_rain_element()
+                build_footer_element(repeat_tag)
             ]
         }
         reply_thread_card(message_id, loading_card_payload)
 
-        # ---------------- BUNG TỆP VÀO THREAD (ĐÃ TỰ ĐỘNG BUNG ĐÚNG ĐỊNH DẠNG PDF, ẢNH, VIDEO) ----------------
+        # ---------------- BUNG TỆP VÀO THREAD (TỰ ĐỘNG BUNG PDF, ẢNH, VIDEO) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2, KHỐI NỀN TURQUOISE & CHỮ XANH NGỌC ĐẬM ----------------
+        # ---------------- THẺ 2 (HOÀN TẤT): BANNER 1/2, NỀN TURQUOISE & SỐ LẦN ĐẾM Ở GÓC PHẢI ----------------
         title_side_md = "**<text_tag color='turquoise'>・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
-        heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*{repeat_tag}"
+        # Đã lược bỏ tag đếm ở cạnh Ticket ID để dời xuống góc dưới bên phải thẻ
+        heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
-        # Khối Callout Box nền turquoise, chữ xanh ngọc đậm turquoise
-        card2_top_highlight = build_highlight_box("<font color='turquoise'><b>[FingerHeart] Great to have everyone </b></font>", bg_style="turquoise")
+        # 🌟 Cập nhật nội dung nốt nhạc mới trong khối nền turquoise
+        card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
         card2_bottom_highlight = build_pill_tag("・❥Cᴏᴍᴘʟᴇᴛᴇᴅ")
 
         finish_card_payload = {
@@ -1185,7 +1221,8 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                 },
                 card2_bottom_highlight,
                 {"tag": "hr"},
-                build_footer_rain_element()
+                # 🌟 Footer đặt tag mưa ở bên trái và số lần đếm ở góc phải thẻ
+                build_footer_element(repeat_tag)
             ]
         }
         reply_thread_card(message_id, finish_card_payload)
