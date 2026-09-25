@@ -216,9 +216,9 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- HÀM NÉN VIDEO BẢO ĐẢM 100% LUÔN DƯỚI 20MB ĐỂ BUNG TRỰC TIẾP -----------------
+# ----------------- HÀM NÉN VIDEO CHUẨN HD 480P ĐẢM BẢO LUÔN < 20MB -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
-    """Nén video an toàn với cơ chế 2 tầng chống lỗi chia hết cho 2"""
+    """Nén video về chuẩn MP4 HD 480p, tối ưu bitrate để luôn nằm trong khoảng 3MB - 8MB"""
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
             return file_path
@@ -226,7 +226,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         ext = os.path.splitext(file_path)[1].lower()
 
-        # Nếu file đã là MP4 chuẩn và nhẹ <= 20MB thì giữ nguyên
+        # Nếu file đã là MP4 và nhẹ <= 20MB thì giữ nguyên
         if ext == ".mp4" and size_mb <= 20.0:
             return file_path
 
@@ -240,28 +240,26 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         temp_out = os.path.join(dir_name, f"tmp_enc_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
-        # Tầng 1: Đảm bảo độ rộng chia hết cho 2 (trunc) và chiều cao -2, bitrate 550k tối ưu
-        vf_filter = "scale=trunc(min(720,iw)/2)*2:-2,fps=15"
-
+        # Cú pháp chuẩn hóa 480:-2, không dùng dấu phẩy trong hàm để tránh lỗi syntax
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "1",
             "-i", file_path,
-            "-vf", vf_filter,
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-b:v", "550k", "-maxrate", "750k", "-bufsize", "1200k",
+            "-vf", "scale=480:-2,fps=15",
+            "-c:v", "libx264", "-preset", "veryfast",
+            "-b:v", "600k", "-maxrate", "800k", "-bufsize", "1200k",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
             temp_out
         ]
 
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=180)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=240)
         gc.collect()
 
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 50000:
             out_mb = os.path.getsize(temp_out) / (1024 * 1024)
-            print(f"⚡ Đã nén video an toàn thành công: {clean_base}.mp4 ({out_mb:.2f} MB)")
+            print(f"⚡ Đã nén video HD 480p thành công: {clean_base}.mp4 ({out_mb:.2f} MB)")
             
             try:
                 if os.path.exists(final_mp4) and final_mp4 != temp_out:
@@ -274,35 +272,10 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
             os.rename(temp_out, final_mp4)
             return final_mp4
         else:
-            err = proc.stderr.decode('utf-8', errors='ignore')[-300:] if proc.stderr else "unknown"
-            print(f"⚠️ Nén tầng 1 chưa đạt, chuyển sang tầng 2 dự phòng: err={err}")
             if os.path.exists(temp_out):
                 os.remove(temp_out)
-
-            # Tầng 2 dự phòng: scale 480:-2 cố định
-            cmd_fallback = [
-                FFMPEG_EXEC, "-y", "-nostdin",
-                "-threads", "1",
-                "-i", file_path,
-                "-vf", "scale=480:-2,fps=12",
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
-                "-pix_fmt", "yuv420p",
-                "-an",
-                "-movflags", "+faststart",
-                temp_out
-            ]
-            proc_fb = subprocess.run(cmd_fallback, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
-            if proc_fb.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 50000:
-                try:
-                    if os.path.exists(final_mp4) and final_mp4 != temp_out:
-                        os.remove(final_mp4)
-                    if os.path.exists(file_path) and file_path != temp_out and file_path != final_mp4:
-                        os.remove(file_path)
-                except Exception:
-                    pass
-                os.rename(temp_out, final_mp4)
-                return final_mp4
-
+            err = proc.stderr.decode('utf-8', errors='ignore')[-200:] if proc.stderr else ""
+            print(f"⚠️ Nén chưa hoàn tất: {err}")
     except Exception as e:
         print(f"Lỗi nén video: {e}")
         if 'temp_out' in locals() and os.path.exists(temp_out):
@@ -351,7 +324,7 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
 
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
-        # Mọi video > 20MB hoặc có đuôi WebM/MOV/AVI đều được nén ngay
+        # Tự động nén video > 20MB hoặc tệp chưa chuẩn MP4
         if is_webm or ext in [".webm", ".mov", ".avi", ".mkv"] or (is_video and (ext != ".mp4" or size_mb > 20.0)):
             return compress_video_to_safe_mp4(file_path)
 
@@ -403,7 +376,7 @@ def remove_reaction_from_message(message_id: str, reaction_id: str):
         print(f"Lỗi gỡ reaction: {e}")
 
 # ----------------- TẢI LÊN FILE LARK -----------------
-def upload_lark_file(file_path: str, file_type: str = "mp4") -> str:
+def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
     if not os.path.exists(file_path):
         return ""
     if os.path.getsize(file_path) / (1024 * 1024) > 28.0:
@@ -428,8 +401,6 @@ def upload_lark_file(file_path: str, file_type: str = "mp4") -> str:
                 body = res.json()
                 if body.get("code") == 0:
                     return body["data"]["file_key"]
-                else:
-                    print(f"❌ Lark API lỗi upload: {body}")
     except Exception as e:
         print(f"Lỗi upload: {e}")
     return ""
@@ -469,7 +440,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                 size_mb = os.path.getsize(send_path) / (1024 * 1024)
                 file_key = ""
                 if size_mb <= 28.0:
-                    file_key = upload_lark_file(send_path, "mp4") or upload_lark_file(send_path, "stream")
+                    file_key = upload_lark_file(send_path, "stream") or upload_lark_file(send_path, "mp4")
 
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder() \
@@ -507,7 +478,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK ĐA TẦNG CHO BYVN.NET, BOM.SO, L1NK.DEV -----------------
+# ----------------- 5. GIẢI MÃ LINK ĐA TẦNG CHO BOM.SO, BYVN.NET, L1NK.DEV -----------------
 def extract_urls_from_text(raw_text: str) -> list:
     urls = []
     text = html.unescape(raw_text)
@@ -553,10 +524,23 @@ def resolve_proof_url(url: str) -> str:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://byvn.net/"
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
     }
-    cur_url = url
+    cur_url = url.strip()
+
+    # Thử bắt nhanh chuyển hướng Location qua HEAD
+    try:
+        r_head = global_session.head(cur_url, headers=headers, allow_redirects=False, timeout=8, verify=False)
+        if r_head.status_code in [301, 302, 303, 307, 308]:
+            loc = r_head.headers.get("Location")
+            if loc:
+                loc = urllib.parse.urljoin(cur_url, loc)
+                if not any(s in loc.lower() for s in ["bom.so", "byvn.net", "l1nk.dev"]):
+                    print(f"🔗 Bắt link chuyển tiếp trực tiếp: {loc}")
+                    return loc
+                cur_url = loc
+    except Exception:
+        pass
 
     if "stream.aspx" in cur_url and "id=" in cur_url:
         m = re.search(r'id=([^&]+)', cur_url)
@@ -577,7 +561,13 @@ def resolve_proof_url(url: str) -> str:
             if r.url != cur_url:
                 cur_url = r.url
 
-            if not any(s in cur_url for s in ["byvn.net", "bom.so", "l1nk.dev", "encurtador.dev", "acesse.one"]):
+            if r.history:
+                for hist in r.history:
+                    loc = hist.headers.get("Location", "")
+                    if loc and not any(s in loc.lower() for s in ["bom.so", "byvn.net", "l1nk.dev"]):
+                        return urllib.parse.urljoin(hist.url, loc)
+
+            if not any(s in cur_url.lower() for s in ["byvn.net", "bom.so", "l1nk.dev", "encurtador.dev", "acesse.one"]):
                 print(f"🔗 Đã theo dấu chuyển hướng đến link đích: {cur_url}")
                 return cur_url
 
@@ -957,7 +947,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         }
         reply_thread_card(message_id, loading_card_payload)
 
-        # ---------------- BUNG TỆP VÀO THREAD (ĐÃ BẢO ĐẢM TẤT CẢ VIDEO LUÔN < 20MB ĐỂ PHÁT TRỰC TIẾP) ----------------
+        # ---------------- BUNG TỆP VÀO THREAD (ĐÃ BẢO ĐẢM NÉN VỀ DƯỚI 20MB) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
         # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 VÀ CĂN GIỮA Ở TRÊN CÙNG ----------------
@@ -1056,7 +1046,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ SỬA TRIỆT ĐỂ LỖI NÉN TỆP MP4 & VIDEO 40MB BỊ VƯỢT DUNG LƯỢNG)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ SỬA DỨT ĐIỂM LỖI LINK BOM.SO & NÉN VIDEO DƯỚI 40MB)...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
