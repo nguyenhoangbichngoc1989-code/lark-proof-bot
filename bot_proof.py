@@ -104,8 +104,9 @@ client = lark.Client.builder() \
     .log_level(lark.LogLevel.INFO) \
     .build()
 
-# ----------------- HÀM TẠO BANNER THU NHỎ BẰNG 1/2 VÀ CĂN GIỮA -----------------
+# ----------------- HÀM TẠO BANNER THU NHỎ KHOẢNG 1/2 VÀ CĂN CHÍNH GIỮA -----------------
 def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
+    """Tỷ lệ cột 3 : 2 : 3 giúp banner ảnh thu nhỏ còn ~25% bề ngang thẻ, căn chính giữa"""
     if not img_key or img_key.startswith("DÁN_"):
         return []
     return [
@@ -117,13 +118,13 @@ def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
                 {
                     "tag": "column",
                     "width": "weighted",
-                    "weight": 1,
+                    "weight": 3,
                     "elements": [{"tag": "markdown", "content": " "}]
                 },
                 {
                     "tag": "column",
                     "width": "weighted",
-                    "weight": 2,  # Đúng 2/4 = 50% (1/2) bề ngang thẻ
+                    "weight": 2,
                     "elements": [
                         {
                             "tag": "img",
@@ -136,7 +137,7 @@ def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
                 {
                     "tag": "column",
                     "width": "weighted",
-                    "weight": 1,
+                    "weight": 3,
                     "elements": [{"tag": "markdown", "content": " "}]
                 }
             ]
@@ -145,7 +146,7 @@ def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
 
 # ----------------- HÀM TẠO CÁC KHỐI ĐIỂM NHẤN TRÊN THẺ -----------------
 def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
-    """Tạo khung điểm nhấn trên (Callout Box bo góc nền màu chuẩn Lark)"""
+    """Tạo khung điểm nhấn trên (Callout Box bo góc nền màu, căn giữa và in đậm chuẩn xác)"""
     return {
         "tag": "column_set",
         "flex_mode": "none",
@@ -157,8 +158,12 @@ def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
                 "weight": 1,
                 "elements": [
                     {
-                        "tag": "markdown",
-                        "content": content_md
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": content_md
+                        },
+                        "text_align": "center"
                     }
                 ]
             }
@@ -166,47 +171,19 @@ def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
     }
 
 def build_pill_tag(content_text: str) -> dict:
-    """Tạo tag điểm nhấn dưới dạng viên thuốc bo tròn căn giữa thẻ"""
+    """Tạo tag điểm nhấn dưới dạng viên thuốc bo tròn căn giữa thẻ (đã lược bỏ emoji)"""
     return {
-        "tag": "column_set",
-        "flex_mode": "none",
-        "background_style": "default",
-        "columns": [
-            {
-                "tag": "column",
-                "width": "weighted",
-                "weight": 1,
-                "elements": [{"tag": "markdown", "content": " "}]
-            },
-            {
-                "tag": "column",
-                "width": "weighted",
-                "weight": 2,
-                "elements": [
-                    {
-                        "tag": "markdown",
-                        "content": f"<text_tag color='grey'>{content_text}</text_tag>"
-                    }
-                ]
-            },
-            {
-                "tag": "column",
-                "width": "weighted",
-                "weight": 1,
-                "elements": [{"tag": "markdown", "content": " "}]
-            }
-        ]
+        "tag": "div",
+        "text": {
+            "tag": "lark_md",
+            "content": f"<text_tag color='grey'>{content_text}</text_tag>"
+        },
+        "text_align": "center"
     }
 
-# 🌟 FOOTER ĐỐI XỨNG CHUẨN GIỮA THẺ: MƯA BÊN TRÁI - TAG SỐ LẦN ĐẾM (ĐỎ HỒNG CARMINE) BÊN PHẢI
+# 🌟 FOOTER ĐỐI XỨNG CĂN GIỮA: MƯA BÊN TRÁI - TAG SỐ LẦN ĐẾM (ĐỎ HỒNG CARMINE) BÊN PHẢI
 def build_footer_element(repeat_tag_str: str = "") -> dict:
     columns = [
-        {
-            "tag": "column",
-            "width": "weighted",
-            "weight": 1,
-            "elements": [{"tag": "markdown", "content": " "}]
-        },
         {
             "tag": "column",
             "width": "weighted",
@@ -230,13 +207,6 @@ def build_footer_element(repeat_tag_str: str = "") -> dict:
                     "content": repeat_tag_str
                 }
             ]
-        })
-    else:
-        columns.append({
-            "tag": "column",
-            "width": "weighted",
-            "weight": 1,
-            "elements": [{"tag": "markdown", "content": " "}]
         })
 
     return {
@@ -281,7 +251,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
+        return f"{size_bytes / (1024 * 1024):.2f} KB"
     return f"{size_bytes} B"
 
 def sanitize_filename(filename: str) -> str:
@@ -1172,7 +1142,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         else:
             repeat_tag = "**<text_tag color='carmine'>🔁 Lần 1</text_tag>**"
 
-        # ---------------- THẺ 1: BANNER 1/2, KHỐI NỀN CARMINE ----------------
+        # ---------------- THẺ 1: BANNER 1/2, KHỐI NỀN CARMINE CĂN GIỮA & IN ĐẬM ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -1188,7 +1158,8 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
-        card1_top_highlight = build_highlight_box("<font color='white'><b>😆 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; </b></font>", bg_style="carmine")
+        # 🌟 Cập nhật dòng chữ nghệ thuật mới °•*⁀➷... căn giữa & in đậm chữ trắng trên nền carmine
+        card1_top_highlight = build_highlight_box("<font color='white'><b>°•*⁀➷𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt;</b></font>", bg_style="carmine")
         card1_bottom_highlight = build_pill_tag("⌛Lᴏᴀᴅɪɴɢ...")
 
         loading_card_payload = {
@@ -1205,7 +1176,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- BUNG TỆP VÀO THREAD (TỰ ĐỘNG BUNG PDF, ẢNH, VIDEO) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): BANNER 1/2, NỀN TURQUOISE & NỐT NHẠC MỚI ----------------
+        # ---------------- THẺ 2 (HOÀN TẤT): BANNER 1/2, NỀN TURQUOISE CĂN GIỮA & IN ĐẬM ----------------
         title_side_md = "**<text_tag color='turquoise'>・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
@@ -1213,7 +1184,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
-        # 🌟 Cập nhật nội dung nốt nhạc mới trong khối nền turquoise
+        # 🌟 Căn giữa & in đậm chữ trắng trên nền turquoise
         card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
         card2_bottom_highlight = build_pill_tag("・❥Cᴏᴍᴘʟᴇᴛᴇᴅ")
 
