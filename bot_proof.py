@@ -89,7 +89,19 @@ BANNER_CARD1_KEY = "img_v3_0215r_61dad065-35d7-45ba-a33d-6ab073a717ah"      # Th
 BANNER_ERROR_KEY = "img_v3_0215r_6e344d17-b29f-4de6-a147-177aa11fa62h"      # Thẻ Báo Lỗi / Cảnh Báo
 BANNER_COMPLETED_KEY = "img_v3_0215r_124a0bca-2990-426a-8cf2-c72aeadb7fdh"  # Thẻ 2: Hoàn Tất
 
-FOOTER_RAIN_TEXT = "🌧️ **<text_tag color='indigo'>ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...</text_tag>** 🌧️"
+# 🌟 FOOTER TRỜI MƯA CĂN GIỮA - CHỮ TO HƠN - MÀU WATHET
+FOOTER_RAIN_MD = "### 🌧️ <text_tag color='wathet'>**ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...**</text_tag> 🌧️"
+
+def build_footer_rain_element() -> dict:
+    """Tạo khối footer trời mưa căn chính giữa thẻ, chữ to và tag màu wathet"""
+    return {
+        "tag": "div",
+        "text": {
+            "tag": "lark_md",
+            "content": FOOTER_RAIN_MD
+        },
+        "text_align": "center"
+    }
 
 PROCESSED_MESSAGES = set()
 
@@ -147,6 +159,7 @@ def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
 
 # ----------------- HÀM TẠO 2 ĐIỂM NHẤN TRÊN THẺ (CALLOUT BOX & PILL TAG) -----------------
 def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
+    """Tạo khung điểm nhấn trên (Callout Box bo góc nền màu nổi bật, chữ không bao giờ bị mất)"""
     return {
         "tag": "column_set",
         "flex_mode": "none",
@@ -158,12 +171,8 @@ def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
                 "weight": 1,
                 "elements": [
                     {
-                        "tag": "div",
-                        "text": {
-                            "tag": "lark_md",
-                            "content": content_md
-                        },
-                        "text_align": "left"
+                        "tag": "markdown",
+                        "content": content_md
                     }
                 ]
             }
@@ -171,6 +180,7 @@ def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
     }
 
 def build_pill_tag(content_text: str) -> dict:
+    """Tạo tag điểm nhấn dưới dạng viên thuốc bo tròn căn giữa thẻ (đã lược bỏ emoji)"""
     return {
         "tag": "div",
         "text": {
@@ -215,7 +225,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / 1024:.2f} KB"
+        return f"{size_bytes / (1024 * 1024):.2f} KB"
     return f"{size_bytes} B"
 
 def sanitize_filename(filename: str) -> str:
@@ -251,7 +261,7 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         print(f"Lỗi reply thread card: {e}")
 
-# ----------------- HÀM NÉN VIDEO CHO TỆP ĐẾN 500MB -----------------
+# ----------------- HÀM NÉN VIDEO CHO TỆP ĐẾN 500MB (BẢO ĐẢM XUẤT 6MB - 14MB, RÕ NÉT AWB) -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
@@ -275,6 +285,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         temp_out = os.path.join(dir_name, f"tmp_hd_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
+        # Nấc 1: Chuẩn nét HD 720p tối ưu cho video lớn
         vf_hd = "scale=w=1280:h=1280:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=20,eq=contrast=1.15"
 
         cmd_hd = [
@@ -310,6 +321,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
                 if os.path.exists(temp_out):
                     os.remove(temp_out)
 
+        # Nấc 2 dự phòng an toàn cho video thời lượng rất dài
         vf_safe = "scale=w=854:h=854:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
         cmd_safe = [
             FFMPEG_EXEC, "-y", "-nostdin",
@@ -653,7 +665,7 @@ def resolve_proof_url(url: str) -> str:
         return u_clean
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
     }
@@ -744,7 +756,7 @@ def _save_gdrive_stream(res, target_dir: str, real_title: str, file_id: str) -> 
         for chunk in res.iter_content(chunk_size=1024 * 1024):
             if chunk:
                 f.write(chunk)
-    if os.path.exists(save_path) and os.path.getsize(save_path) > 1000:
+    if os.path.exists(save_path) and os.path.getsize(save_path) > 500:
         print(f"📥 Đã tải Drive thành công: {clean_save_name} ({format_size(os.path.getsize(save_path))})")
         return True
     if os.path.exists(save_path):
@@ -754,7 +766,7 @@ def _save_gdrive_stream(res, target_dir: str, real_title: str, file_id: str) -> 
 # ----------------- TẢI FILE GOOGLE DRIVE VƯỢT QUA TRANG CẢNH BÁO VI-RÚT (ĐẾN 500MB) -----------------
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*"
     }
     real_title = preferred_name or extract_gdrive_title(file_id)
@@ -833,7 +845,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
         clean_save_name = sanitize_filename(real_title or f"gdrive_{file_id}")
         fallback_path = os.path.join(target_dir, clean_save_name)
         output = gdown.download(url=f"https://drive.google.com/uc?id={file_id}", output=fallback_path, quiet=False, fuzzy=True)
-        if output and os.path.exists(output) and os.path.getsize(output) > 1000:
+        if output and os.path.exists(output) and os.path.getsize(output) > 500:
             print(f"📥 Đã tải Drive bằng gdown thành công: {clean_save_name}")
             return True
     except Exception as e:
@@ -927,7 +939,6 @@ def download_proof(url: str, target_dir: str) -> bool:
 
         raw_name = extracted_name or os.path.basename(urllib.parse.urlparse(final_url).path) or "downloaded_file"
 
-        # Nếu content_type là pdf hoặc link có chứa pdf
         if "application/pdf" in content_type and not raw_name.lower().endswith(".pdf"):
             raw_name = f"{raw_name}.pdf"
 
@@ -1054,7 +1065,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                             )
                         },
                         {"tag": "hr"},
-                        {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
+                        build_footer_rain_element()
                     ]
                 }
                 reply_thread_card(message_id, sharepoint_card)
@@ -1063,7 +1074,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                     "elements": error_img_element + [
                         {"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"},
                         {"tag": "hr"},
-                        {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
+                        build_footer_rain_element()
                     ]
                 })
             shutil.rmtree(task_temp_dir, ignore_errors=True)
@@ -1107,7 +1118,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THẺ 1: BANNER THU NHỎ 1/2 VÀ CĂN GIỮA (TAG ⌛Lᴏᴀᴅɪɴɢ... ĐỎ) ----------------
+        # ---------------- THẺ 1: BANNER THU NHỎ 1/2, KHỐI NỀN CARMINE & CHỮ ĐỎ HỒNG ĐẬM ----------------
         file_lines = []
         for item in final_files:
             file_lines.append(f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>")
@@ -1128,7 +1139,8 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
-        card1_top_highlight = build_highlight_box("<font color='white'><b>[Laugh] 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 >< </b></font>", bg_style="carmine")
+        # Khối Callout Box nền carmine, chữ đỏ hồng đậm carmine
+        card1_top_highlight = build_highlight_box("<font color='carmine'><b>[FingerHeart] 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; </b></font>", bg_style="carmine")
         card1_bottom_highlight = build_pill_tag("⌛Lᴏᴀᴅɪɴɢ...")
 
         loading_card_payload = {
@@ -1137,7 +1149,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                 {"tag": "markdown", "content": header_block},
                 card1_bottom_highlight,
                 {"tag": "hr"},
-                {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
+                build_footer_rain_element()
             ]
         }
         reply_thread_card(message_id, loading_card_payload)
@@ -1145,7 +1157,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- BUNG TỆP VÀO THREAD (ĐÃ TỰ ĐỘNG BUNG ĐÚNG ĐỊNH DẠNG PDF, ẢNH, VIDEO) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2 (TAG ・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ XANH NGỌC) ----------------
+        # ---------------- THẺ 2 (HOÀN TẤT): BANNER THU NHỎ 1/2, KHỐI NỀN TURQUOISE & CHỮ XANH NGỌC ĐẬM ----------------
         title_side_md = "**<text_tag color='turquoise'>・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
@@ -1153,7 +1165,8 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
-        card2_top_highlight = build_highlight_box("<font color='white'><b>[FingerHeart] Great to have everyone </b></font>", bg_style="turquoise")
+        # Khối Callout Box nền turquoise, chữ xanh ngọc đậm turquoise
+        card2_top_highlight = build_highlight_box("<font color='turquoise'><b>[FingerHeart] Great to have everyone </b></font>", bg_style="turquoise")
         card2_bottom_highlight = build_pill_tag("・❥Cᴏᴍᴘʟᴇᴛᴇᴅ")
 
         finish_card_payload = {
@@ -1172,7 +1185,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                 },
                 card2_bottom_highlight,
                 {"tag": "hr"},
-                {"tag": "markdown", "content": FOOTER_RAIN_TEXT}
+                build_footer_rain_element()
             ]
         }
         reply_thread_card(message_id, finish_card_payload)
@@ -1240,7 +1253,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET LARK CLIENT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF SẴN SÀNG (ĐÃ NHẬN DIỆN CHUẨN XÁC PDF, ẢNH & VIDEO)...")
+    print("🚀 BOT LARK PROOF SẴN SÀNG...")
 
     builder = lark.EventDispatcherHandler.builder("", "")
     builder.register_p2_im_message_receive_v1(handle_message)
