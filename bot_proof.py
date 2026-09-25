@@ -166,7 +166,7 @@ def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
     }
 
 def build_pill_tag(content_text: str) -> dict:
-    """Tạo tag điểm nhấn dưới dạng viên thuốc bo tròn căn giữa thẻ (đã lược bỏ emoji)"""
+    """Tạo tag điểm nhấn dưới dạng viên thuốc bo tròn căn giữa thẻ"""
     return {
         "tag": "column_set",
         "flex_mode": "none",
@@ -198,14 +198,19 @@ def build_pill_tag(content_text: str) -> dict:
         ]
     }
 
-# 🌟 FOOTER DƯỚI CÙNG: MƯA BÊN TRÁI - TAG SỐ LẦN ĐẾM BÊN PHẢI
+# 🌟 FOOTER ĐỐI XỨNG CHUẨN GIỮA THẺ: MƯA BÊN TRÁI - TAG SỐ LẦN ĐẾM (ĐỎ HỒNG CARMINE) BÊN PHẢI
 def build_footer_element(repeat_tag_str: str = "") -> dict:
-    """Tạo footer dưới cùng: thời tiết mưa bên trái, số lần đếm ở góc phải thẻ"""
     columns = [
         {
             "tag": "column",
             "width": "weighted",
-            "weight": 3,
+            "weight": 1,
+            "elements": [{"tag": "markdown", "content": " "}]
+        },
+        {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 5,
             "elements": [
                 {
                     "tag": "markdown",
@@ -218,7 +223,7 @@ def build_footer_element(repeat_tag_str: str = "") -> dict:
         columns.append({
             "tag": "column",
             "width": "weighted",
-            "weight": 1,
+            "weight": 2,
             "elements": [
                 {
                     "tag": "markdown",
@@ -226,6 +231,14 @@ def build_footer_element(repeat_tag_str: str = "") -> dict:
                 }
             ]
         })
+    else:
+        columns.append({
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "elements": [{"tag": "markdown", "content": " "}]
+        })
+
     return {
         "tag": "column_set",
         "flex_mode": "none",
@@ -268,7 +281,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def sanitize_filename(filename: str) -> str:
@@ -1153,11 +1166,11 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         summary_group_str = "\n".join(group_lines)
 
-        # ---------------- THIẾT LẬP TAG ĐẾM SỐ LẦN ----------------
+        # 🌟 ĐỊNH DẠNG SỐ LẦN ĐẾM IN ĐẬM, TAG MÀU ĐỎ HỒNG CARMINE
         if req_count > 1:
-            repeat_tag = f"<text_tag color='orange'>🔁 Yêu cầu lần {req_count}</text_tag>"
+            repeat_tag = f"**<text_tag color='carmine'>🔁 Yêu cầu lần {req_count}</text_tag>**"
         else:
-            repeat_tag = "<text_tag color='blue'>🔁 Lần 1</text_tag>"
+            repeat_tag = "**<text_tag color='carmine'>🔁 Lần 1</text_tag>**"
 
         # ---------------- THẺ 1: BANNER 1/2, KHỐI NỀN CARMINE ----------------
         file_lines = []
@@ -1192,11 +1205,10 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- BUNG TỆP VÀO THREAD (TỰ ĐỘNG BUNG PDF, ẢNH, VIDEO) ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
-        # ---------------- THẺ 2 (HOÀN TẤT): BANNER 1/2, NỀN TURQUOISE & SỐ LẦN ĐẾM Ở GÓC PHẢI ----------------
+        # ---------------- THẺ 2 (HOÀN TẤT): BANNER 1/2, NỀN TURQUOISE & NỐT NHẠC MỚI ----------------
         title_side_md = "**<text_tag color='turquoise'>・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         
-        # Đã lược bỏ tag đếm ở cạnh Ticket ID để dời xuống góc dưới bên phải thẻ
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
         thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
@@ -1221,7 +1233,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                 },
                 card2_bottom_highlight,
                 {"tag": "hr"},
-                # 🌟 Footer đặt tag mưa ở bên trái và số lần đếm ở góc phải thẻ
                 build_footer_element(repeat_tag)
             ]
         }
