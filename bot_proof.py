@@ -534,7 +534,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                         actual_sent_count += 1
                         log(f"📄 Đã bung tệp PDF vào thread: {file_name}")
 
-            # 3. Tệp Video
+            # 3. Tệp Video (bỏ qua nén nếu <= 32MB để bung siêu tốc)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = f["path"]
                 if os.path.getsize(send_path) / (1024 * 1024) > 32.0:
@@ -614,7 +614,7 @@ def get_aes_ctr_decrypter(key: bytes, iv: bytes):
             log(f"Lỗi khởi tạo AES CTR: {e}")
             return lambda data: data
 
-# ----------------- 5. GIẢI MÃ VÀ TẢI TỆP MEGA.NZ -----------------
+# ----------------- 4. GIẢI MÃ VÀ TẢI TỆP MEGA.NZ -----------------
 def download_mega(url: str, target_dir: str) -> bool:
     clean_u = url.strip()
     log(f"☁️ Đang xử lý liên kết MEGA: {clean_u}")
@@ -752,7 +752,26 @@ def download_mega(url: str, target_dir: str) -> bool:
 
     return False
 
-# ----------------- GIẢI MÃ VÀ TẢI TỆP ONEDRIVE -----------------
+# ----------------- 5. GIẢI MÃ VÀ TẢI TỆP ONEDRIVE (MICROSOFT BADGER API) -----------------
+def get_badger_token() -> str:
+    """Lấy Badger OAuth Token ẩn từ Microsoft để giải mã các link OneDrive SPO mới"""
+    try:
+        url = "https://api-badgerp.svc.ms/v1.0/token"
+        headers = {
+            "AppId": "1141147648",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        }
+        res = global_session.post(url, headers=headers, json={"appId": "5cbed6ac-a083-4e14-b191-b4ba07653de2"}, timeout=10)
+        if res.status_code == 200:
+            token = res.json().get("token", "")
+            if token:
+                log(f"🔑 Lấy thành công Badger Token OneDrive: {token[:25]}...")
+                return token
+    except Exception as e:
+        log(f"Lỗi lấy Badger Token: {e}")
+    return ""
+
 def _save_stream_to_file(res, target_dir: str, default_name: str = "proof_file") -> bool:
     try:
         content_disposition = res.headers.get("Content-Disposition", "")
@@ -800,75 +819,126 @@ def _save_stream_to_file(res, target_dir: str, default_name: str = "proof_file")
 
 def download_onedrive(url: str, target_dir: str) -> bool:
     clean_u = url.strip()
+    log(f"☁️ Đang xử lý liên kết OneDrive: {clean_u}")
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "*/*"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
     }
 
-    try:
-        sep = "&" if "?" in clean_u else "?"
-        direct_try_url = f"{clean_u}{sep}download=1"
-        res = global_session.get(direct_try_url, headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
-        ct = res.headers.get("Content-Type", "").lower()
-        if res.status_code in [200, 206] and "text/html" not in ct:
-            log("🔗 Bắt thành công luồng CDN tải OneDrive qua download=1!")
-            return _save_stream_to_file(res, target_dir, "onedrive_video.mp4")
-    except Exception as e:
-        log(f"Lỗi bước 1 OneDrive: {e}")
-
+    dest_url = clean_u
+    dest_html = ""
     try:
         r = global_session.get(clean_u, headers=headers, allow_redirects=True, timeout=15, verify=False)
         dest_url = r.url
         dest_html = r.text
+    except Exception as e:
+        log(f"Lưu ý chuyển hướng OneDrive: {e}")
 
-        cid_match = re.search(r'cid=([a-fA-F0-9]+)', dest_url) or re.search(r'/c/([a-fA-F0-9]+)', clean_u)
-        id_match = re.search(r'[?&]id=([^&]+)', dest_url) or re.search(r'[?&]resid=([^&]+)', dest_url)
-        auth_match = re.search(r'[?&]authkey=([^&]+)', dest_url) or re.search(r'/c/[a-fA-F0-9]+/([a-zA-Z0-9_-]+)', clean_u)
+    # BƯỚC 1: XỬ LÝ QUA MICROSOFT BADGER AUTHENTICATION API
+    badger_token = get_badger_token()
+    if badger_token:
+        badger_headers = {
+            "Authorization": f"Badger {badger_token}",
+            "Prefer": "autoredeem",
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
 
-        cid = cid_match.group(1) if cid_match else ""
-        resid = urllib.parse.unquote(id_match.group(1)) if id_match else ""
-        authkey = auth_match.group(1) if auth_match else ""
+        # Tạo danh sách các Share Token ứng viên
+        candidates_share_keys = []
 
-        if not resid:
-            p_match = re.search(r'photosData=([^&]+)', dest_url)
-            if p_match:
-                decoded_p = urllib.parse.unquote(p_match.group(1))
-                m_share = re.search(r'/share/([^?&]+)', decoded_p)
-                if m_share:
-                    resid = m_share.group(1)
+        # 1. Mã hóa chuẩn Base64URL của Microsoft
+        b64_full = base64.urlsafe_b64encode(clean_u.encode('utf-8')).decode('utf-8').rstrip('=')
+        candidates_share_keys.append(f"u!{b64_full}")
 
-        candidates = []
-        if resid and authkey:
-            candidates.append(f"https://onedrive.live.com/download?resid={resid}&authkey={authkey}")
-            candidates.append(f"https://onedrive.live.com/download?resid={resid}&authkey=!{authkey}")
-        if cid and resid:
-            candidates.append(f"https://onedrive.live.com/download?cid={cid}&resid={resid}")
-        if resid:
-            candidates.append(f"https://onedrive.live.com/download?resid={resid}")
+        clean_no_q = clean_u.split('?')[0]
+        b64_no_q = base64.urlsafe_b64encode(clean_no_q.encode('utf-8')).decode('utf-8').rstrip('=')
+        candidates_share_keys.append(f"u!{b64_no_q}")
 
-        for cand in candidates:
+        # 2. Token nằm sau đường dẫn /v/c/
+        m_path_token = re.search(r'/c/[a-zA-Z0-9_-]+/([a-zA-Z0-9_-]+)', clean_no_q)
+        if m_path_token:
+            candidates_share_keys.append(f"u!{m_path_token.group(1)}")
+            candidates_share_keys.append(m_path_token.group(1))
+
+        # 3. Trích xuất từ tham số URL sau chuyển hướng
+        redeem_m = re.search(r'[?&]redeem=([^&]+)', dest_url)
+        if redeem_m:
+            candidates_share_keys.append(f"u!{redeem_m.group(1)}")
+            candidates_share_keys.append(redeem_m.group(1))
+
+        # 4. Trích xuất từ photosData (chuẩn mới SPO)
+        photos_m = re.search(r'[?&]photosData=([^&]+)', dest_url)
+        if photos_m:
             try:
-                res_cand = global_session.get(cand, headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
-                if res_cand.status_code in [200, 206] and "text/html" not in res_cand.headers.get("Content-Type", "").lower():
-                    log(f"🔗 Bắt thành công liên kết download trực tiếp: {cand}")
-                    return _save_stream_to_file(res_cand, target_dir, "onedrive_video.mp4")
+                dec_p = urllib.parse.unquote(photos_m.group(1))
+                m_item = re.search(r'/share/([^?&]+)', dec_p)
+                if m_item:
+                    candidates_share_keys.append(f"u!{m_item.group(1)}")
+                    candidates_share_keys.append(m_item.group(1))
             except Exception:
-                continue
+                pass
 
-        unescaped = html.unescape(dest_html).replace(r'\"', '"').replace(r'\/', '/').replace(r'\u0026', '&')
-        cdn_links = re.findall(r'https?://[a-zA-Z0-9\.\-]+(?:microsoftpersonalcontent\.com|1drv\.com|storage\.live\.com)[^\s"\'<>]+', unescaped)
-        for cdn_u in cdn_links:
-            if any(k in cdn_u for k in ["download", "content", "stream", "tempurl"]):
+        for sk in candidates_share_keys:
+            api_endpoints = [
+                f"https://my.microsoftpersonalcontent.com/_api/v2.0/shares/{sk}/driveitem",
+                f"https://api.onedrive.com/v1.0/shares/{sk}/driveitem",
+                f"https://my.microsoftpersonalcontent.com/_api/v2.0/shares/{sk}/root"
+            ]
+
+            for ep in api_endpoints:
                 try:
-                    res_cdn = global_session.get(cdn_u, headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
-                    if res_cdn.status_code in [200, 206] and "text/html" not in res_cdn.headers.get("Content-Type", "").lower():
-                        log("🔗 Bắt thành công tệp qua CDN ngầm!")
-                        return _save_stream_to_file(res_cdn, target_dir, "onedrive_video.mp4")
+                    res_api = global_session.get(ep, headers=badger_headers, timeout=12)
+                    if res_api.status_code == 200:
+                        data = res_api.json()
+                        dl_url = data.get("@content.downloadUrl") or data.get("@microsoft.graph.downloadUrl") or data.get("downloadUrl")
+                        fname = data.get("name") or "onedrive_video.mp4"
+                        if dl_url:
+                            log(f"🎯 Bắt thành công luồng tải qua Badger API: {fname}")
+                            res_dl = global_session.get(dl_url, headers=badger_headers, stream=True, timeout=(30, 480))
+                            if res_dl.status_code in [200, 206] and "text/html" not in res_dl.headers.get("Content-Type", "").lower():
+                                return _save_stream_to_file(res_dl, target_dir, fname)
                 except Exception:
                     continue
 
-    except Exception as e:
-        log(f"Lỗi cào dữ liệu OneDrive: {e}")
+        # Thử tải luồng nội dung trực tiếp qua Badger
+        for sk in candidates_share_keys[:3]:
+            for content_ep in [
+                f"https://my.microsoftpersonalcontent.com/_api/v2.0/shares/{sk}/driveitem/content",
+                f"https://api.onedrive.com/v1.0/shares/{sk}/root/content"
+            ]:
+                try:
+                    res_c = global_session.get(content_ep, headers=badger_headers, stream=True, allow_redirects=True, timeout=(30, 480))
+                    if res_c.status_code in [200, 206] and "text/html" not in res_c.headers.get("Content-Type", "").lower():
+                        log("🎯 Tải trực tiếp thành công qua Badger Content Endpoint!")
+                        return _save_stream_to_file(res_c, target_dir, "onedrive_video.mp4")
+                except Exception:
+                    continue
+
+    # BƯỚC 2: CÁC PHƯƠNG ÁN DỰ PHÒNG TRUYỀN THỐNG
+    try:
+        sep = "&" if "?" in clean_u else "?"
+        res_d1 = global_session.get(f"{clean_u}{sep}download=1", headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
+        if res_d1.status_code in [200, 206] and "text/html" not in res_d1.headers.get("Content-Type", "").lower():
+            return _save_stream_to_file(res_d1, target_dir, "onedrive_video.mp4")
+    except Exception:
+        pass
+
+    try:
+        cid_m = re.search(r'cid=([a-fA-F0-9]+)', dest_url) or re.search(r'/c/([a-fA-F0-9]+)', clean_u)
+        id_m = re.search(r'[?&]id=([^&]+)', dest_url) or re.search(r'[?&]resid=([^&]+)', dest_url)
+        cid = cid_m.group(1) if cid_m else ""
+        resid = urllib.parse.unquote(id_m.group(1)) if id_m else ""
+
+        if cid and resid:
+            dl_cand = f"https://onedrive.live.com/download?cid={cid}&resid={resid}"
+            res_cand = global_session.get(dl_cand, headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
+            if res_cand.status_code in [200, 206] and "text/html" not in res_cand.headers.get("Content-Type", "").lower():
+                return _save_stream_to_file(res_cand, target_dir, "onedrive_video.mp4")
+    except Exception:
+        pass
 
     return False
 
@@ -1014,6 +1084,10 @@ def download_proof(url: str, target_dir: str) -> bool:
     if "mega.nz" in clean_u.lower():
         return download_mega(clean_u, target_dir)
 
+    # 2. OneDrive (1drv.ms / onedrive.live.com)
+    if "1drv.ms" in clean_u.lower() or "onedrive.live.com" in clean_u.lower():
+        return download_onedrive(clean_u, target_dir)
+
     if any(s in clean_u.lower() for s in ["bom.so", "byvn.net", "bit.ly", "l1nk.dev"]):
         final_url = resolve_short_url(clean_u)
     else:
@@ -1024,7 +1098,6 @@ def download_proof(url: str, target_dir: str) -> bool:
     if "mega.nz" in final_url.lower():
         return download_mega(final_url, target_dir)
 
-    # 2. OneDrive (1drv.ms / onedrive.live.com)
     if "1drv.ms" in final_url.lower() or "onedrive.live.com" in final_url.lower():
         return download_onedrive(final_url, target_dir)
 
@@ -1060,7 +1133,6 @@ def download_proof(url: str, target_dir: str) -> bool:
 # ----------------- 6. BÓC TÁCH NỘI DUNG TIN NHẮN -----------------
 def extract_urls_from_text(raw_text: str) -> list:
     text = html.unescape(raw_text)
-    text = urllib.parse.unquote(text)
     text = text.replace(r"\/", "/").replace(r"\u002f", "/").replace(r"\u002F", "/")
     
     found = re.findall(r'https?://[^\s"\'<>]+', text)
