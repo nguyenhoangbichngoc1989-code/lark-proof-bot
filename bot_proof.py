@@ -534,7 +534,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                         actual_sent_count += 1
                         log(f"📄 Đã bung tệp PDF vào thread: {file_name}")
 
-            # 3. Tệp Video (bỏ qua nén nếu <= 32MB để bung siêu tốc)
+            # 3. Tệp Video
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = f["path"]
                 if os.path.getsize(send_path) / (1024 * 1024) > 32.0:
@@ -614,12 +614,12 @@ def get_aes_ctr_decrypter(key: bytes, iv: bytes):
             log(f"Lỗi khởi tạo AES CTR: {e}")
             return lambda data: data
 
-# ----------------- 5. GIẢI MÃ VÀ TẢI TỆP MEGA.NZ (THƯ MỤC & FILE ĐƠN LẺ) -----------------
+# ----------------- 5. GIẢI MÃ VÀ TẢI TỆP MEGA.NZ -----------------
 def download_mega(url: str, target_dir: str) -> bool:
     clean_u = url.strip()
     log(f"☁️ Đang xử lý liên kết MEGA: {clean_u}")
     
-    # 1. Nhận diện Thư mục MEGA (mega.nz/folder/ID#KEY hoặc mega.nz/#F!ID!KEY)
+    # 1. Nhận diện Thư mục MEGA
     m_folder = re.search(r'mega\.nz/(?:folder/|#F!)([a-zA-Z0-9_-]+)[#!]([a-zA-Z0-9_-]+)', clean_u)
     if m_folder:
         folder_id = m_folder.group(1)
@@ -630,7 +630,6 @@ def download_mega(url: str, target_dir: str) -> bool:
                 return False
             master_key = master_key[:16]
 
-            # Gọi API lấy cây thư mục
             api_url = f"https://g.api.mega.co.nz/cs?id=0&n={folder_id}"
             res = global_session.post(api_url, json=[{"a": "f", "c": 1, "r": 1, "ca": 1}], timeout=25)
             res_data = res.json()
@@ -641,7 +640,6 @@ def download_mega(url: str, target_dir: str) -> bool:
             downloaded_count = 0
 
             for node in nodes:
-                # Chỉ lọc lấy file (t == 0)
                 if node.get("t") == 0 and "k" in node:
                     k_str = node["k"]
                     enc_key_b64 = k_str.split(":")[-1]
@@ -655,7 +653,6 @@ def download_mega(url: str, target_dir: str) -> bool:
                         real_key = struct.pack(">4I", k_ints[0] ^ k_ints[4], k_ints[1] ^ k_ints[5], k_ints[2] ^ k_ints[6], k_ints[3] ^ k_ints[7])
                         iv = struct.pack(">4I", k_ints[4], k_ints[5], 0, 0)
 
-                        # Giải mã tên tệp
                         file_name = f"mega_{node['h']}.mp4"
                         if node.get("a"):
                             try:
@@ -677,7 +674,6 @@ def download_mega(url: str, target_dir: str) -> bool:
                         if not any(file_name.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".png", ".pdf"]):
                             file_name += ".mp4"
 
-                        # Yêu cầu link tải file
                         dl_req = [{"a": "g", "g": 1, "n": node["h"]}]
                         dl_res = global_session.post(f"https://g.api.mega.co.nz/cs?id=1&n={folder_id}", json=dl_req, timeout=25)
                         dl_data = dl_res.json()
@@ -701,7 +697,7 @@ def download_mega(url: str, target_dir: str) -> bool:
         except Exception as e:
             log(f"Lỗi xử lý thư mục MEGA: {e}")
 
-    # 2. Nhận diện Tệp MEGA đơn lẻ (mega.nz/file/ID#KEY hoặc mega.nz/#!ID!KEY)
+    # 2. Nhận diện Tệp MEGA đơn lẻ
     m_file = re.search(r'mega\.nz/(?:file/|#!)([a-zA-Z0-9_-]+)[#!]([a-zA-Z0-9_-]+)', clean_u)
     if m_file:
         file_id = m_file.group(1)
@@ -1014,7 +1010,7 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 def download_proof(url: str, target_dir: str) -> bool:
     clean_u = url.strip()
 
-    # 🌟 1. Ưu tiên xử lý link MEGA.NZ ngay từ đầu để giữ nguyên chuỗi sau dấu #
+    # 1. MEGA.NZ
     if "mega.nz" in clean_u.lower():
         return download_mega(clean_u, target_dir)
 
@@ -1025,7 +1021,6 @@ def download_proof(url: str, target_dir: str) -> bool:
 
     log(f"📥 Đang tải liên kết: {final_url}")
 
-    # Nếu sau khi giải mã link rút gọn ra link MEGA
     if "mega.nz" in final_url.lower():
         return download_mega(final_url, target_dir)
 
@@ -1302,9 +1297,6 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
     except Exception as e:
         log(f"Lỗi message: {e}")
 
-def handle_message_updated(data: Any) -> None:
-    pass
-
 # ----------------- 8. KHỞI CHẠY WEBSOCKET AUTO-RECONNECT -----------------
 def start_bot():
     log("🚀 BOT LARK PROOF KHỞI ĐỘNG...")
@@ -1312,7 +1304,6 @@ def start_bot():
         try:
             builder = lark.EventDispatcherHandler.builder("", "")
             builder.register_p2_im_message_receive_v1(handle_message)
-            builder.register_p2_im_message_updated_v1(handle_message_updated)
             event_handler = builder.build()
 
             ws_client = lark.ws.Client(
