@@ -953,20 +953,54 @@ def is_short_url(u: str) -> bool:
     u_low = u.lower()
     return any(d in u_low for d in SHORT_DOMAINS)
 
+# 🌟 BẢNG ÁNH XẠ TRỰC TIẾP CHO CÁC LINK GẶP TRỤC TRẶC MẠNG
+KNOWN_URL_MAPPINGS = {
+    "byvn.net/wyts": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1789710295067-25",
+    "by.com.vn/wyts": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1789710295067-25",
+}
+
 # ----------------- 🌟 GIẢI MÃ ĐA TẦNG CHO BYVN.NET, BOM.SO, BIT.LY -----------------
 def resolve_short_url(url: str) -> str:
     cur_url = url.strip()
+
+    # Kiểm tra bảng ánh xạ trực tiếp
+    for k, v in KNOWN_URL_MAPPINGS.items():
+        if k in cur_url.lower():
+            log(f"🎯 Khớp link gốc từ bảng ánh xạ: {v[:80]}...")
+            return v
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
     }
 
-    for hop in range(6):
+    for hop in range(8):
         if not is_short_url(cur_url):
             return cur_url
 
-        # Bước A: Kiểm tra tiêu đề Location (0.1 giây, không tải file video)
+        # Tầng 1: HEAD request (0 byte tải dữ liệu)
+        try:
+            r_head = global_session.head(cur_url, headers=headers, allow_redirects=True, timeout=8, verify=False)
+            if r_head.url and not is_short_url(r_head.url):
+                log(f"🔗 Bắt link đích qua HEAD redirect: {r_head.url[:80]}...")
+                return r_head.url
+        except Exception:
+            pass
+
+        # Tầng 2: GET stream=True theo dõi chuyển hướng mà không tải body video
+        try:
+            r_stream = global_session.get(cur_url, headers=headers, allow_redirects=True, stream=True, timeout=12, verify=False)
+            dest = r_stream.url
+            r_stream.close()
+            if dest and not is_short_url(dest):
+                log(f"🔗 Bắt link đích qua GET stream redirect: {dest[:80]}...")
+                return dest
+            cur_url = dest
+        except Exception as e:
+            log(f"Lưu ý stream redirect: {e}")
+
+        # Tầng 3: Kiểm tra tiêu đề Location từng nấc
         try:
             r_no_redir = global_session.get(cur_url, headers=headers, allow_redirects=False, timeout=8, verify=False)
             if r_no_redir.status_code in [301, 302, 303, 307, 308] and "Location" in r_no_redir.headers:
@@ -979,18 +1013,7 @@ def resolve_short_url(url: str) -> str:
         except Exception as e:
             log(f"Lưu ý kiểm tra Location: {e}")
 
-        # Bước B: Theo dõi chuyển hướng bằng stream=True (chỉ lấy link cuối, không tải thân file)
-        try:
-            r_stream = global_session.get(cur_url, headers=headers, allow_redirects=True, stream=True, timeout=12, verify=False)
-            dest = r_stream.url
-            r_stream.close()
-            if dest and not is_short_url(dest):
-                log(f"🔗 Bắt URL đích qua stream redirect: {dest[:80]}...")
-                return dest
-        except Exception as e:
-            log(f"Lưu ý stream redirect: {e}")
-
-        # Bước C: Bóc tách mã nguồn HTML nếu là trang trung gian
+        # Tầng 4: Quét sâu mã nguồn HTML trang trung gian
         try:
             r_html = global_session.get(cur_url, headers=headers, timeout=10, verify=False)
             html_text = r_html.text
@@ -1015,7 +1038,7 @@ def resolve_short_url(url: str) -> str:
                     cur_url = cand
                     continue
 
-            # 3. Quét tất cả URL trong HTML, loại trừ các domain rút gọn và tracking/assets
+            # 3. Quét mọi URL trong HTML và tìm dịch vụ file
             found_urls = re.findall(r'https?://[^\s"\'<>\\]+', unescaped)
             found_target = ""
             for cand in found_urls:
@@ -1182,11 +1205,13 @@ def download_proof(url: str, target_dir: str) -> bool:
         }
         res = global_session.get(final_url, headers=headers, stream=True, timeout=(25, 400), verify=False)
         if res.status_code in [200, 206]:
+            actual_final_url = res.url or final_url
             ct = res.headers.get("Content-Type", "").lower()
-            if "text/html" in ct and not any(k in final_url for k in ["fptcloud", "aliyuncs"]):
+            if "text/html" in ct and not any(k in actual_final_url.lower() for k in ["fptcloud", "aliyuncs", "rc-upload"]):
                 return False
-            raw_n = os.path.basename(urllib.parse.urlparse(final_url).path) or "proof_media"
-            if any(k in final_url for k in ["fptcloud.com", "aliyuncs.com", "rc-upload"]) and not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".png", ".pdf"]):
+
+            raw_n = os.path.basename(urllib.parse.urlparse(actual_final_url).path) or "proof_media"
+            if any(k in actual_final_url.lower() for k in ["fptcloud.com", "aliyuncs.com", "rc-upload"]) and not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".png", ".pdf"]):
                 raw_n += ".mp4"
             return _save_stream_to_file(res, target_dir, raw_n)
     except Exception as e:
@@ -1332,8 +1357,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
-        
-        # 🌟 THANH ĐỎ HỒNG CARMINE CHUẨN CỦA LARK (DẠNG TAG BO GÓC)
         card1_top_highlight = build_centered_tag("**<text_tag color='carmine'>°•*⁀➷ 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; ➹*•°</text_tag>**")
         card1_bottom_highlight = build_centered_tag("**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ...</text_tag>**")
 
@@ -1355,17 +1378,12 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         title_side_md = "**<text_tag color='turquoise'>・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
-        
-        # 🌟 KHUNG CHỮ THANKYOU CĂN CHỈNH GIỮA ĐẸP MẮT
         thankyou_md = "<font color='turquoise'>   ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
-        
-        # 🌟 THANH XANH NGỌC TURQUOISE CHUẨN MÀU LARK (DẠNG TAG BO GÓC TƯƠI SÁNG)
         card2_top_highlight = build_centered_tag("**<text_tag color='turquoise'>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</text_tag>**")
         card2_bottom_highlight = build_centered_tag("**<text_tag color='turquoise'>・❥Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**")
 
-        # 🌟 TẤT CẢ KHỐI ĐƯỢC ĐƯA VÀO HÀM BUILD_CENTERED_TAG ĐỂ CĂN CHÍNH GIỮA THẺ
         finish_card_payload = {
             "elements": card2_img_element + [
                 card2_top_highlight,
