@@ -289,7 +289,7 @@ def format_size(size_bytes: int) -> str:
     elif size_bytes >= 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
     elif size_bytes >= 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} KB"
+        return f"{size_bytes / 1024:.2f} KB"
     return f"{size_bytes} B"
 
 def sanitize_filename(filename: str) -> str:
@@ -374,7 +374,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         maxrate_kbps = int(bitrate_kbps * 1.3)
         bufsize_kbps = int(bitrate_kbps * 2.0)
 
-        # 🌟 BỘ LỌC CHUẨN CÚ PHÁP TUYỆT ĐỐI (KHÔNG DẤU NHÁY, KHÔNG LỖI NGẮT FILTER)
         vf_hd = "scale=w=960:h=960:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=18,eq=contrast=1.12"
 
         cmd_hd = [
@@ -412,8 +411,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
                 if os.path.exists(temp_out):
                     os.remove(temp_out)
         else:
-            err_log = proc.stderr.decode('utf-8', errors='ignore')[-200:] if proc.stderr else ""
-            print(f"⚠️ Nấc 1 chưa đạt: {err_log}")
             if os.path.exists(temp_out):
                 os.remove(temp_out)
 
@@ -529,7 +526,6 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
 
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
-        # Mọi video > 18MB đều được tối ưu hóa trước khi đưa vào danh sách gửi
         if is_webm or ext in [".webm", ".mov", ".avi", ".mkv"] or (is_video and (ext != ".mp4" or size_mb > 18.0)):
             return compress_video_to_safe_mp4(file_path)
 
@@ -579,7 +575,6 @@ def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
     if not os.path.exists(file_path):
         return ""
     
-    # Chốt chặn: nếu file > 25MB thì nén khẩn cấp để không bao giờ bị Lark từ chối
     if os.path.getsize(file_path) / (1024 * 1024) > 25.0:
         file_path = compress_video_to_safe_mp4(file_path)
 
@@ -688,12 +683,12 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LINK ĐA TẦNG CHO FPT CLOUD, BIT.LY, BOM.SO, BYVN.NET, L1NK.DEV -----------------
+# ----------------- 5. GIẢI MÃ LINK ĐA TẦNG CHO BYVN.NET, FPT CLOUD, BIT.LY, BOM.SO -----------------
 def is_valid_proof_url(u: str) -> bool:
     u_low = u.lower()
     if any(ign in u_low for ign in [
         "cloudflare.com", "googleapis.com/css", "googletagmanager", "google-analytics",
-        "jsdelivr.net", "w3.org", "facebook.com", "schema.org", "bom.so", "byvn.net", "l1nk.dev", "bit.ly"
+        "jsdelivr.net", "w3.org", "facebook.com", "schema.org", "bom.so", "l1nk.dev", "bit.ly"
     ]):
         return False
     return any(k in u_low for k in [
@@ -726,9 +721,9 @@ def extract_urls_from_text(raw_text: str) -> list:
         except Exception:
             pass
 
-    for fid in re.findall(r'folders/([a-zA-Z0-9_-]{25,45})', text):
+    for fid in re.findall(r'folders/([a-zA-Z0-9_-]{25,50})', text):
         urls.append(f"https://drive.google.com/drive/folders/{fid}")
-    for fid in re.findall(r'/file/d/([a-zA-Z0-9_-]{25,45})', text):
+    for fid in re.findall(r'/file/d/([a-zA-Z0-9_-]{25,50})', text):
         urls.append(f"https://drive.google.com/file/d/{fid}/view")
 
     return list(set(urls))
@@ -736,15 +731,6 @@ def extract_urls_from_text(raw_text: str) -> list:
 def resolve_proof_url(url: str) -> str:
     u_clean = url.strip()
     
-    if "byvn.net/Diev" in u_clean:
-        return "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1790139814764-37?spm=a1zb9.8233112.0.0.54d63a88mQqBDh"
-    if "byvn.net/Ib2L" in u_clean:
-        return "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1790139814764-36?spm=a1zb9.8233112.0.0.54d63a88mQqBDh"
-    if "byvn.net/Kkqd" in u_clean:
-        return "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1790139814764-4"
-    if "bit.ly/46Zbvjn" in u_clean:
-        return "https://drive.google.com/drive/folders/1JYNtOAYE-BD0P3XkEyXfT78oC5j_GFH8"
-
     if any(k in u_clean.lower() for k in [
         ".pdf", ".mp4", ".mov", ".png", ".jpg", ".jfif", ".webm", ".avi", ".mkv",
         "aliyuncs.com", "oss-", "rc-upload", "tiktokcdn.com", "byteoversea.com", "fptcloud.com"
@@ -752,7 +738,7 @@ def resolve_proof_url(url: str) -> str:
         return u_clean
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
     }
@@ -781,23 +767,38 @@ def resolve_proof_url(url: str) -> str:
             return f"{cur_url}{sep}download=1"
         return url
 
+    # 🌟 Giải mã sâu trang trung gian của byvn.net / bom.so
     try:
         r_html = global_session.get(cur_url, headers=headers, timeout=12, verify=False)
         html_text = r_html.text
-        found_urls = extract_urls_from_text(html_text)
-        for cand in found_urls:
-            print(f"🔗 Bóc tách thành công link đích ẩn trong mã nguồn: {cand}")
-            return cand
+        unescaped_text = html.unescape(html_text).replace(r'\/', '/').replace(r'\u002f', '/').replace(r'\u002F', '/')
+
+        folder_m = re.search(r'drive\.google\.com/drive/folders/([a-zA-Z0-9_-]+)', unescaped_text)
+        if folder_m:
+            dest = f"https://drive.google.com/drive/folders/{folder_m.group(1)}"
+            print(f"🔗 Bóc tách thành công Google Drive Folder từ byvn: {dest}")
+            return dest
+
+        file_m = re.search(r'drive\.google\.com/file/d/([a-zA-Z0-9_-]+)', unescaped_text)
+        if file_m:
+            dest = f"https://drive.google.com/file/d/{file_m.group(1)}/view"
+            print(f"🔗 Bóc tách thành công Google Drive File từ byvn: {dest}")
+            return dest
 
         meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', html_text, re.IGNORECASE)
         if meta_match:
             return urllib.parse.urljoin(cur_url, meta_match.group(1))
 
-        js_match = re.search(r'(?:window\.location(?:\.href)?|location\.replace)\s*=\s*["\']([^"\']+)["\']', html_text)
+        js_match = re.search(r'(?:window\.location(?:\.href)?|location\.replace|location\.href)\s*=\s*["\']([^"\']+)["\']', html_text)
         if js_match:
             js_dest = js_match.group(1)
             if js_dest.startswith("http") and not any(s in js_dest for s in ["byvn.net", "bom.so", "bit.ly"]):
                 return js_dest
+
+        found_urls = extract_urls_from_text(unescaped_text)
+        for cand in found_urls:
+            print(f"🔗 Bóc tách thành công link đích ẩn trong mã nguồn: {cand}")
+            return cand
     except Exception:
         pass
 
@@ -853,11 +854,12 @@ def _save_gdrive_stream(res, target_dir: str, real_title: str, file_id: str) -> 
 # ----------------- TẢI FILE GOOGLE DRIVE VƯỢT QUA TRANG CẢNH BÁO VI-RÚT (ĐẾN 500MB) -----------------
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*"
     }
     real_title = preferred_name or extract_gdrive_title(file_id)
 
+    # 1. Tải trực tiếp qua usercontent
     try:
         direct_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
         res = global_session.get(direct_url, headers=headers, stream=True, verify=False, timeout=(30, 480))
@@ -867,6 +869,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"Lỗi tải trực tiếp usercontent: {e}")
 
+    # 2. Xử lý trang xác nhận cảnh báo tệp lớn (Download anyway)
     try:
         init_url = f"https://drive.google.com/uc?export=download&id={file_id}"
         res = global_session.get(init_url, headers=headers, stream=True, verify=False, timeout=50)
@@ -876,11 +879,26 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
         html_text = res.text
 
-        if not real_title:
-            fn_match = re.search(r'([a-zA-Z0-9_\-\. ]+\.(?:pdf|mp4|mov|avi|mkv|webm|jpg|png))\s*\(\d+M\)', html_text)
-            if fn_match:
-                real_title = fn_match.group(1).strip()
+        # 🌟 Bắt link nút "Vẫn tải xuống" mới nhất của Google Drive
+        link_match = re.search(r'<a\s+[^>]*?id=["\']uc-download-link["\'][^>]*?href=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
+        if not link_match:
+            link_match = re.search(r'href=["\']((?:https://drive\.usercontent\.google\.com)?/download\?[^"\']+)["\']', html_text, re.IGNORECASE)
+        if not link_match:
+            link_match = re.search(r'<a\s+[^>]*?href=["\']([^"\']+)["\'][^>]*?>\s*(?:Download anyway|Vẫn tải xuống|Tải xuống)', html_text, re.IGNORECASE)
 
+        if link_match:
+            confirmed_url = link_match.group(1)
+            if confirmed_url.startswith("/"):
+                confirmed_url = "https://drive.usercontent.google.com" + confirmed_url
+            confirmed_url = html.unescape(confirmed_url)
+            headers_down = headers.copy()
+            headers_down["Referer"] = res.url
+            res_down = global_session.get(confirmed_url, headers=headers_down, stream=True, verify=False, timeout=(30, 480))
+            if res_down.status_code == 200 and "text/html" not in res_down.headers.get("Content-Type", "").lower():
+                if _save_gdrive_stream(res_down, target_dir, real_title, file_id):
+                    return True
+
+        # Dự phòng bằng form truyền thống
         form_params = {}
         for input_tag in re.findall(r'<input\b[^>]*>', html_text, re.IGNORECASE):
             name_m = re.search(r'\bname=["\']([^"\']+)["\']', input_tag, re.IGNORECASE)
@@ -903,23 +921,13 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
             form_params["export"] = "download"
 
         action_m = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
-        if action_m:
-            action_url = action_m.group(1)
-            download_url = action_url if action_url.startswith("http") else urllib.parse.urljoin("https://drive.usercontent.google.com", action_url)
-        else:
-            download_url = "https://drive.usercontent.google.com/download"
+        download_url = action_m.group(1) if action_m else "https://drive.usercontent.google.com/download"
+        if not download_url.startswith("http"):
+            download_url = urllib.parse.urljoin("https://drive.usercontent.google.com", download_url)
 
         headers_down = headers.copy()
         headers_down["Referer"] = res.url
-
-        method_m = re.search(r'<form[^>]+method=["\']([^"\']+)["\']', html_text, re.IGNORECASE)
-        method = method_m.group(1).upper() if method_m else "GET"
-
-        if method == "POST":
-            res_down = global_session.post(download_url, data=form_params, headers=headers_down, stream=True, verify=False, timeout=(30, 480))
-        else:
-            res_down = global_session.get(download_url, params=form_params, headers=headers_down, stream=True, verify=False, timeout=(30, 480))
-
+        res_down = global_session.post(download_url, data=form_params, headers=headers_down, stream=True, verify=False, timeout=(30, 480))
         if res_down.status_code == 200 and "text/html" not in res_down.headers.get("Content-Type", "").lower():
             if _save_gdrive_stream(res_down, target_dir, real_title, file_id):
                 return True
@@ -927,11 +935,12 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     except Exception as e:
         print(f"Lỗi tải Drive qua uc: {e}")
 
+    # 3. Dự phòng bằng gdown
     try:
         import gdown
-        clean_save_name = sanitize_filename(real_title or f"gdrive_{file_id}")
+        clean_save_name = sanitize_filename(real_title or f"gdrive_{file_id}.mp4")
         fallback_path = os.path.join(target_dir, clean_save_name)
-        output = gdown.download(url=f"https://drive.google.com/uc?id={file_id}", output=fallback_path, quiet=False, fuzzy=True)
+        output = gdown.download(id=file_id, output=fallback_path, quiet=False, fuzzy=True)
         if output and os.path.exists(output) and os.path.getsize(output) > 500:
             print(f"📥 Đã tải Drive bằng gdown thành công: {clean_save_name}")
             return True
@@ -940,54 +949,85 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
     return False
 
-# ----------------- TẢI TOÀN BỘ FILE TRONG THƯ MỤC GOOGLE DRIVE -----------------
+# ----------------- 🌟 BÓC TÁCH VÀ TẢI TOÀN BỘ FILE TRONG THƯ MỤC GOOGLE DRIVE -----------------
 def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
     folder_match = re.search(r'/folders/([a-zA-Z0-9_-]+)', folder_url)
     folder_id = folder_match.group(1) if folder_match else ""
-    clean_url = f"https://drive.google.com/drive/folders/{folder_id}" if folder_id else folder_url.split("?")[0]
+    if not folder_id:
+        m = re.search(r'([a-zA-Z0-9_-]{25,50})', folder_url)
+        folder_id = m.group(1) if m else ""
 
-    try:
-        import gdown
-        downloaded = gdown.download_folder(clean_url, output=target_dir, quiet=False, use_cookies=False)
-        if downloaded and len(downloaded) > 0:
-            print(f"📥 Đã tải thư mục Drive qua gdown thành công: {len(downloaded)} tệp")
-            return True
-    except Exception as e:
-        print(f"Lỗi gdown download_folder: {e}")
+    if not folder_id:
+        return False
+
+    clean_url = f"https://drive.google.com/drive/folders/{folder_id}"
+    print(f"📁 Đang xử lý thư mục Google Drive: {folder_id}")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "*/*"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
     }
+
+    found_files = {}
+
+    # 🌟 PHƯƠNG PHÁP 1: Bóc tách qua cổng iframe embeddedfolderview của Google (Chuẩn 100%, không bị chặn)
     try:
-        res = global_session.get(clean_url, headers=headers, timeout=20, verify=False)
-        if res.status_code == 200:
-            html_text = res.text
-            found_files = {}
+        embed_url = f"https://drive.google.com/embeddedfolderview?id={folder_id}#list"
+        r_embed = global_session.get(embed_url, headers=headers, timeout=20, verify=False)
+        if r_embed.status_code == 200:
+            html_embed = r_embed.text
+            for m in re.finditer(r'/file/d/([a-zA-Z0-9_-]{25,50})[^\'"]*[\'"][^>]*>([^<]+)<', html_embed):
+                fid = m.group(1)
+                fname = html.unescape(m.group(2)).strip()
+                if fid != folder_id and len(fid) >= 25:
+                    found_files[fid] = fname
 
-            matches = re.findall(r'\["([a-zA-Z0-9_-]{28,45})",\["([^"]+)"', html_text)
-            matches += re.findall(r'\["([a-zA-Z0-9_-]{28,45})","([^"]+)"', html_text)
-            matches += re.findall(r'data-id="([a-zA-Z0-9_-]{28,45})"[^>]*data-name="([^"]+)"', html_text)
+            for fid in re.findall(r'/file/d/([a-zA-Z0-9_-]{25,50})', html_embed):
+                if fid != folder_id and fid not in found_files:
+                    found_files[fid] = f"gdrive_file_{fid}"
             
-            raw_fids = re.findall(r'/file/d/([a-zA-Z0-9_-]{28,45})', html_text)
-            for rfid in raw_fids:
-                if rfid != folder_id and rfid not in found_files:
-                    found_files[rfid] = f"gdrive_file_{rfid}"
-
-            for fid, fname in matches:
-                if fid not in found_files and 28 <= len(fid) <= 45 and fid != folder_id:
-                    if not fname.startswith("http") and not any(k in fname for k in ["<", ">", "{", "}", ";", "="]):
-                        found_files[fid] = fname
-
-            if found_files:
-                print(f"📁 Tìm thấy {len(found_files)} tệp trong thư mục Drive, đang tiến hành tải từng tệp...")
-                success_count = 0
-                for fid, fname in found_files.items():
-                    if download_single_gdrive_file(fid, target_dir, fname):
-                        success_count += 1
-                return success_count > 0
+            for fid in re.findall(r'id=["\']entry-([a-zA-Z0-9_-]{25,50})["\']', html_embed):
+                if fid != folder_id and fid not in found_files:
+                    found_files[fid] = f"gdrive_file_{fid}"
     except Exception as e:
-        print(f"Lỗi Folder Drive HTML fallback: {e}")
+        print(f"Lỗi embeddedfolderview: {e}")
+
+    # 🌟 PHƯƠNG PHÁP 2: Bóc tách mã nguồn trang Drive chính (giải mã chuỗi ký tự thoát \u002f và \/)
+    if not found_files:
+        try:
+            res = global_session.get(clean_url, headers=headers, timeout=20, verify=False)
+            if res.status_code == 200:
+                clean_text = html.unescape(res.text).replace(r'\/', '/').replace(r'\u002f', '/').replace(r'\u002F', '/')
+                for fid in re.findall(r'/file/d/([a-zA-Z0-9_-]{25,50})', clean_text):
+                    if fid != folder_id and fid not in found_files:
+                        found_files[fid] = f"gdrive_file_{fid}"
+                
+                for m in re.finditer(r'\["([a-zA-Z0-9_-]{28,45})",\s*\[?"([^"]+\.(?:mp4|mov|avi|mkv|webm|jpg|jpeg|png|webp|pdf|zip))"', clean_text, re.IGNORECASE):
+                    fid, fname = m.group(1), m.group(2)
+                    if fid != folder_id:
+                        found_files[fid] = fname
+        except Exception as e:
+            print(f"Lỗi bóc tách Drive HTML: {e}")
+
+    # 🌟 PHƯƠNG PHÁP 3: Dự phòng gdown
+    if not found_files:
+        try:
+            import gdown
+            downloaded = gdown.download_folder(clean_url, output=target_dir, quiet=False, use_cookies=False)
+            if downloaded and len(downloaded) > 0:
+                print(f"📥 Đã tải thư mục Drive qua gdown: {len(downloaded)} tệp")
+                return True
+        except Exception as e:
+            print(f"Lỗi gdown: {e}")
+
+    if found_files:
+        print(f"📁 Tìm thấy {len(found_files)} tệp trong thư mục Drive, đang tiến hành tải từng tệp...")
+        success_count = 0
+        for fid, fname in found_files.items():
+            if download_single_gdrive_file(fid, target_dir, fname):
+                success_count += 1
+        return success_count > 0
 
     return False
 
@@ -996,7 +1036,7 @@ def download_proof(url: str, target_dir: str) -> bool:
     final_url = resolve_proof_url(url)
     
     if any(k in final_url for k in ["drive.google.com", "drive.usercontent.google.com", "docs.google.com"]):
-        if "/folders/" in final_url:
+        if "/folders/" in final_url or "embeddedfolderview" in final_url:
             return download_gdrive_folder(final_url, target_dir)
         else:
             match = re.search(r'(?:/file/d/|/d/|id=|download\?id=)([a-zA-Z0-9_-]{25,50})', final_url)
