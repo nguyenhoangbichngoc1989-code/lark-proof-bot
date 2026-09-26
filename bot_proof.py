@@ -1114,7 +1114,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
             res_down = global_session.get(html.unescape(confirmed_url), headers={"Referer": res.url}, stream=True, verify=False, timeout=(30, 480))
             if res_down.status_code == 200 and "text/html" not in res_down.headers.get("Content-Type", "").lower():
                 return _save_stream_to_file(res_down, target_dir, real_title or f"gdrive_{file_id}")
-    except Exception:
+    except Exception as e:
         pass
 
     try:
