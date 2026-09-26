@@ -166,7 +166,6 @@ def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
         }
     ]
 
-# ----------------- HÀM TẠO CALLOUT BOX CĂN CHÍNH GIỮA TUYỆT ĐỐI -----------------
 def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
     return {
         "tag": "column_set",
@@ -229,7 +228,6 @@ def build_centered_tag(tag_md: str) -> dict:
         ]
     }
 
-# 🌟 FOOTER: MƯA BÊN TRÁI - TAG SỐ LẦN ĐẾM (ĐỎ HỒNG CARMINE) Ở GÓC PHẢI
 def build_footer_element(repeat_tag_str: str = "") -> dict:
     columns = [
         {
@@ -953,10 +951,12 @@ def is_short_url(u: str) -> bool:
     u_low = u.lower()
     return any(d in u_low for d in SHORT_DOMAINS)
 
-# 🌟 BẢNG ÁNH XẠ TRỰC TIẾP CHO CÁC LINK GẶP TRỤC TRẶC MẠNG
+# 🌟 BẢNG ÁNH XẠ TRỰC TIẾP CHO TẤT CẢ CÁC LINK GẶP TRỤC TRẶC MẠNG
 KNOWN_URL_MAPPINGS = {
     "byvn.net/wyts": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1789710295067-25",
     "by.com.vn/wyts": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1789710295067-25",
+    "byvn.net/tep2": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1789710295067-61",
+    "by.com.vn/tep2": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1789710295067-61",
 }
 
 # ----------------- 🌟 GIẢI MÃ ĐA TẦNG CHO BYVN.NET, BOM.SO, BIT.LY -----------------
@@ -1114,7 +1114,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
             res_down = global_session.get(html.unescape(confirmed_url), headers={"Referer": res.url}, stream=True, verify=False, timeout=(30, 480))
             if res_down.status_code == 200 and "text/html" not in res_down.headers.get("Content-Type", "").lower():
                 return _save_stream_to_file(res_down, target_dir, real_title or f"gdrive_{file_id}")
-    except Exception as e:
+    except Exception:
         pass
 
     try:
@@ -1357,7 +1357,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
-        card1_top_highlight = build_centered_tag("**<text_tag color='carmine'>°•*⁀➷ 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; ➹*•°</text_tag>**")
+        card1_top_highlight = build_centered_tag("**<text_tag color='carmine'>°•*⁀➷ 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘W𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; ➹*•°</text_tag>**")
         card1_bottom_highlight = build_centered_tag("**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ...</text_tag>**")
 
         loading_card_payload = {
