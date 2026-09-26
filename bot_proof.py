@@ -846,10 +846,8 @@ def download_onedrive(url: str, target_dir: str) -> bool:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
 
-        # Tạo danh sách các Share Token ứng viên
         candidates_share_keys = []
 
-        # 1. Mã hóa chuẩn Base64URL của Microsoft
         b64_full = base64.urlsafe_b64encode(clean_u.encode('utf-8')).decode('utf-8').rstrip('=')
         candidates_share_keys.append(f"u!{b64_full}")
 
@@ -857,19 +855,16 @@ def download_onedrive(url: str, target_dir: str) -> bool:
         b64_no_q = base64.urlsafe_b64encode(clean_no_q.encode('utf-8')).decode('utf-8').rstrip('=')
         candidates_share_keys.append(f"u!{b64_no_q}")
 
-        # 2. Token nằm sau đường dẫn /v/c/
         m_path_token = re.search(r'/c/[a-zA-Z0-9_-]+/([a-zA-Z0-9_-]+)', clean_no_q)
         if m_path_token:
             candidates_share_keys.append(f"u!{m_path_token.group(1)}")
             candidates_share_keys.append(m_path_token.group(1))
 
-        # 3. Trích xuất từ tham số URL sau chuyển hướng
         redeem_m = re.search(r'[?&]redeem=([^&]+)', dest_url)
         if redeem_m:
             candidates_share_keys.append(f"u!{redeem_m.group(1)}")
             candidates_share_keys.append(redeem_m.group(1))
 
-        # 4. Trích xuất từ photosData (chuẩn mới SPO)
         photos_m = re.search(r'[?&]photosData=([^&]+)', dest_url)
         if photos_m:
             try:
@@ -903,7 +898,6 @@ def download_onedrive(url: str, target_dir: str) -> bool:
                 except Exception:
                     continue
 
-        # Thử tải luồng nội dung trực tiếp qua Badger
         for sk in candidates_share_keys[:3]:
             for content_ep in [
                 f"https://my.microsoftpersonalcontent.com/_api/v2.0/shares/{sk}/driveitem/content",
@@ -1256,20 +1250,21 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         summary_group_str = "\n".join(group_lines)
         repeat_tag = f"**<text_tag color='carmine'>📋 Lần {req_count}</text_tag>**" if req_count > 1 else "**<text_tag color='carmine'>📋 Lần 1</text_tag>**"
 
-        # ---------------- THẺ 1: XUẤT HIỆN TỨC THÌ ----------------
+        # ---------------- THẺ 1: XUẤT HIỆN TỨC THÌ (ĐÃ BỎ DÒNG ĐẾM TỆP 1/1) ----------------
         file_lines = [f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>" for item in final_files]
         files_str = "\n".join(file_lines)
 
         header_block = (
             f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-            f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n"
-            f"         ╰┄▸ 🗂️ <text_tag color='indigo'>{file_count}/{file_count}</text_tag>\n\n"
+            f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n\n"
             f"{summary_group_str}\n\n"
             f"{files_str}"
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
-        card1_top_highlight = build_highlight_box("<font color='white'><b>°•*⁀➷𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt;</b></font>", bg_style="carmine")
+        
+        # 🌟 THANH ĐỎ HỒNG CARMINE CHUẨN CỦA LARK (DẠNG TAG BO GÓC)
+        card1_top_highlight = build_centered_tag("**<text_tag color='carmine'>°•*⁀➷ 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; ➹*•°</text_tag>**")
         card1_bottom_highlight = build_centered_tag("**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ...</text_tag>**")
 
         loading_card_payload = {
@@ -1290,18 +1285,23 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         title_side_md = "**<text_tag color='turquoise'>・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
-        thankyou_md = "<font color='turquoise'>      ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+        
+        # 🌟 KHUNG CHỮ THANKYOU CĂN CHỈNH GIỮA ĐẸP MẮT
+        thankyou_md = "<font color='turquoise'>   ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
-        card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
+        
+        # 🌟 THANH XANH NGỌC TURQUOISE CHUẨN MÀU LARK (DẠNG TAG BO GÓC TƯƠI SÁNG)
+        card2_top_highlight = build_centered_tag("**<text_tag color='turquoise'>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</text_tag>**")
         card2_bottom_highlight = build_centered_tag("**<text_tag color='turquoise'>・❥Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**")
 
+        # 🌟 TẤT CẢ KHỐI ĐƯỢC ĐƯA VÀO HÀM BUILD_CENTERED_TAG ĐỂ CĂN CHÍNH GIỮA THẺ
         finish_card_payload = {
             "elements": card2_img_element + [
                 card2_top_highlight,
-                {"tag": "div", "text": {"tag": "lark_md", "content": title_side_md}, "text_align": "center"},
+                build_centered_tag(title_side_md),
                 {"tag": "markdown", "content": heading_md},
-                {"tag": "div", "text": {"tag": "lark_md", "content": thankyou_md}, "text_align": "center"},
+                build_centered_tag(thankyou_md),
                 card2_bottom_highlight,
                 {"tag": "hr"},
                 build_footer_element(repeat_tag)
