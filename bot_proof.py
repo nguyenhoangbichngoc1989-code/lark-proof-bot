@@ -5,6 +5,7 @@ import json
 import time
 import base64
 import html
+import struct
 import shutil
 import zipfile
 import urllib.parse
@@ -23,6 +24,23 @@ from lark_oapi.api.im.v1 import *
 import urllib3
 from PIL import Image
 import pillow_heif
+
+# ----------------- ĐẢM BẢO CÓ THƯ VIỆN CRYPTO GIẢI MÃ MEGA -----------------
+try:
+    from Crypto.Cipher import AES
+    from Crypto.Util import Counter
+except ImportError:
+    try:
+        import sys
+        subprocess.run([sys.executable, "-m", "pip", "install", "pycryptodome"], check=True)
+        from Crypto.Cipher import AES
+        from Crypto.Util import Counter
+    except Exception:
+        pass
+
+# ----------------- HÀM GHI NHẬT KÝ THỜI GIAN THỰC -----------------
+def log(msg: str):
+    print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 # ----------------- 1. MỞ SERVER HTTP DUY TRÌ RENDER -----------------
 class RenderHealthHandler(http.server.BaseHTTPRequestHandler):
@@ -47,10 +65,10 @@ def run_dummy_web_server():
     try:
         socketserver.TCPServer.allow_reuse_address = True
         with socketserver.TCPServer(("", port), RenderHealthHandler) as httpd:
-            print(f"🌐 Đã mở cổng HTTP {port} để duy trì Render...")
+            log(f"🌐 Đã mở cổng HTTP {port} để duy trì Render...")
             httpd.serve_forever()
     except Exception as e:
-        print(f"Lưu ý server HTTP: {e}")
+        log(f"Lưu ý server HTTP: {e}")
 
 threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
@@ -58,14 +76,10 @@ threading.Thread(target=run_dummy_web_server, daemon=True).start()
 FFMPEG_EXEC = "ffmpeg"
 try:
     import static_ffmpeg
-    try:
-        static_ffmpeg.load_or_download()
-    except Exception:
-        pass
     static_ffmpeg.add_paths()
     FFMPEG_EXEC = shutil.which("ffmpeg") or "ffmpeg"
-except Exception as e:
-    print(f"Lưu ý static_ffmpeg: {e}")
+except Exception:
+    pass
 
 try:
     import imageio_ffmpeg
@@ -85,7 +99,7 @@ except Exception:
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pillow_heif.register_heif_opener()
 
-# ----------------- 2. CẤU HÌNH BIẾN MÔI TRƯỜNG & BANNER ẢNH CHO 3 LOẠI THẺ -----------------
+# ----------------- 2. CẤU HÌNH BIẾN MÔI TRƯỜNG & BANNER ẢNH -----------------
 APP_ID = os.environ.get("APP_ID", "").strip() or os.environ.get("LARK_APP_ID", "").strip()
 APP_SECRET = os.environ.get("APP_SECRET", "").strip() or os.environ.get("LARK_APP_SECRET", "").strip()
 TARGET_DOMAIN = getattr(lark, "LARK_DOMAIN", "https://open.larksuite.com")
@@ -94,8 +108,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR = os.path.join(BASE_DIR, "temp_files")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
 
-BANNER_CARD1_KEY = "img_v3_0215r_61dad065-35d7-45ba-a33d-6ab073a717ah"      # Thẻ 1: Loading ban đầu
-BANNER_ERROR_KEY = "img_v3_0215r_6e344d17-b29f-4de6-a147-177aa11fa62h"      # Thẻ Báo Lỗi / Cảnh Báo
+BANNER_CARD1_KEY = "img_v3_0215r_61dad065-35d7-45ba-a33d-6ab073a717ah"      # Thẻ 1: Loading
+BANNER_ERROR_KEY = "img_v3_0215r_6e344d17-b29f-4de6-a147-177aa11fa62h"      # Thẻ Báo Lỗi
 BANNER_COMPLETED_KEY = "img_v3_0215r_124a0bca-2990-426a-8cf2-c72aeadb7fdh"  # Thẻ 2: Hoàn Tất
 
 PROCESSED_MESSAGES = set()
@@ -254,7 +268,7 @@ def build_footer_element(repeat_tag_str: str = "") -> dict:
         "columns": columns
     }
 
-# ----------------- 3. QUẢN LÝ LỊCH SỬ & ĐẾM TẦN SUẤT LẶP LẠI -----------------
+# ----------------- 3. QUẢN LÝ LỊCH SỬ & ĐẾM TẦN SUẤT -----------------
 def load_history() -> dict:
     if os.path.exists(HISTORY_FILE):
         try:
@@ -269,7 +283,7 @@ def save_history(history: dict):
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"Lỗi lưu lịch sử: {e}")
+        log(f"Lỗi lưu lịch sử: {e}")
 
 def get_current_request_count(ticket_id: str) -> int:
     history = load_history()
@@ -305,7 +319,7 @@ def get_tenant_access_token() -> str:
         if res.status_code == 200:
             return res.json().get("tenant_access_token", "")
     except Exception as e:
-        print(f"Lỗi lấy access token: {e}")
+        log(f"Lỗi lấy access token: {e}")
     return ""
 
 def reply_thread_card(message_id: str, card_content: dict):
@@ -321,11 +335,11 @@ def reply_thread_card(message_id: str, card_content: dict):
             .build()
         resp = client.im.v1.message.reply(req)
         if not resp.success():
-            print(f"❌ Lỗi gửi Card: Code={resp.code} | Msg={resp.msg}")
+            log(f"❌ Lỗi gửi Card: Code={resp.code} | Msg={resp.msg}")
     except Exception as e:
-        print(f"Lỗi reply thread card: {e}")
+        log(f"Lỗi reply thread card: {e}")
 
-# ----------------- HÀM NÉN VIDEO SIÊU TỐC (> 32MB) -----------------
+# ----------------- HÀM NÉN VIDEO NHẸ TẢI CPU & TIẾT KIỆM RAM -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
@@ -345,15 +359,16 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         temp_out = os.path.join(dir_name, f"tmp_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
-        # Nén siêu tốc nhẹ tải CPU, tiết kiệm RAM
-        vf = "scale=854:480:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
+        log(f"⚙️ Bắt đầu nén nhẹ tải cho video: {clean_base} ({size_mb:.2f} MB)...")
+
+        vf = "scale=640:360:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "1",
             "-i", file_path,
             "-vf", vf,
             "-c:v", "libx264", "-preset", "ultrafast",
-            "-b:v", "450k", "-maxrate", "600k", "-bufsize", "1000k",
+            "-b:v", "350k", "-maxrate", "450k", "-bufsize", "700k",
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
@@ -365,7 +380,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
 
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 10000:
             out_mb = os.path.getsize(temp_out) / (1024 * 1024)
-            print(f"✨ Nén video hoàn tất: {clean_base}.mp4 ({out_mb:.2f} MB)")
+            log(f"✨ Nén video hoàn tất: {clean_base}.mp4 ({out_mb:.2f} MB)")
             try:
                 if os.path.exists(final_mp4) and final_mp4 != temp_out:
                     os.remove(final_mp4)
@@ -379,13 +394,12 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
             if os.path.exists(temp_out):
                 os.remove(temp_out)
     except Exception as e:
-        print(f"Lỗi nén video: {e}")
+        log(f"Lỗi nén video: {e}")
 
     return file_path
 
-# ----------------- TỰ ĐỘNG NHẬN DIỆN ĐUÔI TỆP (KHÔNG GỌI FFMPEG) -----------------
+# ----------------- TỰ ĐỘNG NHẬN DIỆN ĐUÔI TỆP THEO MAGIC BYTES -----------------
 def auto_detect_and_fix_extension(file_path: str) -> str:
-    """Chỉ nhận diện đuôi file theo magic bytes, không chạy nén để Card 1 hiện tức thì"""
     try:
         dir_name = os.path.dirname(file_path)
         base_name = os.path.basename(file_path)
@@ -419,7 +433,7 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
                 return file_path
 
     except Exception as e:
-        print(f"Lỗi kiểm tra tệp: {e}")
+        log(f"Lỗi kiểm tra tệp: {e}")
     return file_path
 
 # ----------------- CƠ CHẾ THẢ VÀ GỠ REACTION -----------------
@@ -438,10 +452,9 @@ def add_reaction_to_message(message_id: str, emoji_type: str) -> str:
         res = global_session.post(url, headers=headers, json=data, timeout=10)
         if res.status_code == 200:
             body = res.json()
-            rx_id = body.get("data", {}).get("reaction_id", "")
-            return rx_id
+            return body.get("data", {}).get("reaction_id", "")
     except Exception as e:
-        print(f"Lỗi gọi API reaction: {e}")
+        log(f"Lỗi gọi API reaction: {e}")
     return ""
 
 def remove_reaction_from_message(message_id: str, reaction_id: str):
@@ -454,7 +467,7 @@ def remove_reaction_from_message(message_id: str, reaction_id: str):
     try:
         global_session.delete(url, headers=headers, timeout=10)
     except Exception as e:
-        print(f"Lỗi gỡ reaction: {e}")
+        log(f"Lỗi gỡ reaction: {e}")
 
 # ----------------- TẢI LÊN FILE LARK -----------------
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
@@ -484,7 +497,7 @@ def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
                 if body.get("code") == 0:
                     return body["data"]["file_key"]
     except Exception as e:
-        print(f"Lỗi upload: {e}")
+        log(f"Lỗi upload: {e}")
     return ""
 
 def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list = None) -> int:
@@ -509,7 +522,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                         resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(body).build())
                         if resp and resp.success():
                             actual_sent_count += 1
-                            print(f"✅ Đã gửi ảnh: {file_name}")
+                            log(f"✅ Đã gửi ảnh: {file_name}")
 
             # 2. Tệp PDF
             elif file_ext == ".pdf":
@@ -519,12 +532,11 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                     resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     if resp and resp.success():
                         actual_sent_count += 1
-                        print(f"📄 Đã bung tệp PDF vào thread: {file_name}")
+                        log(f"📄 Đã bung tệp PDF vào thread: {file_name}")
 
-            # 3. Tệp Video
+            # 3. Tệp Video (bỏ qua nén nếu <= 32MB để bung siêu tốc)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = f["path"]
-                # Bỏ qua khâu nén nếu video <= 32MB để bung siêu tốc
                 if os.path.getsize(send_path) / (1024 * 1024) > 32.0:
                     send_path = compress_video_to_safe_mp4(file_path, original_name=file_name)
                 
@@ -541,7 +553,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                     resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     if resp and resp.success():
                         actual_sent_count += 1
-                        print(f"📥 Đã bung video phát trực tiếp: {os.path.basename(send_path)}")
+                        log(f"📥 Đã bung video phát trực tiếp: {os.path.basename(send_path)}")
 
             # 4. Tệp khác
             else:
@@ -551,15 +563,200 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                     resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     if resp and resp.success():
                         actual_sent_count += 1
-                        print(f"📎 Đã bung tệp: {file_name}")
+                        log(f"📎 Đã bung tệp: {file_name}")
         except Exception as e:
-            print(f"Lỗi gửi media: {e}")
+            log(f"Lỗi gửi media: {e}")
 
         gc.collect()
 
     return actual_sent_count
 
-# ----------------- 5. GIẢI MÃ LIÊN KẾT ONEDRIVE (MICROSOFT SHARES API) -----------------
+# ----------------- HÀM TIỆN ÍCH MÃ HÓA CHO MEGA.NZ -----------------
+def b64_url_decode(s: str) -> bytes:
+    s = s.strip().replace("-", "+").replace("_", "/")
+    s += "=" * ((4 - len(s) % 4) % 4)
+    return base64.b64decode(s)
+
+def get_aes_ecb_decrypter(key: bytes):
+    try:
+        from Crypto.Cipher import AES
+        return lambda data: AES.new(key, AES.MODE_ECB).decrypt(data)
+    except Exception:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.backends import default_backend
+        c = Cipher(algorithms.AES(key), modes.ECB(), backend=default_backend()).decryptor()
+        return lambda data: c.update(data) + c.finalize()
+
+def get_aes_cbc_decrypter(key: bytes, iv: bytes):
+    try:
+        from Crypto.Cipher import AES
+        return lambda data: AES.new(key, AES.MODE_CBC, iv=iv).decrypt(data)
+    except Exception:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.backends import default_backend
+        c = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend()).decryptor()
+        return lambda data: c.update(data) + c.finalize()
+
+def get_aes_ctr_decrypter(key: bytes, iv: bytes):
+    try:
+        from Crypto.Cipher import AES
+        from Crypto.Util import Counter
+        ctr = Counter.new(128, initial_value=int.from_bytes(iv, 'big'))
+        cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
+        return lambda data: cipher.decrypt(data)
+    except Exception:
+        try:
+            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+            from cryptography.hazmat.backends import default_backend
+            c = Cipher(algorithms.AES(key), modes.CTR(iv), backend=default_backend()).decryptor()
+            return lambda data: c.update(data)
+        except Exception as e:
+            log(f"Lỗi khởi tạo AES CTR: {e}")
+            return lambda data: data
+
+# ----------------- 5. GIẢI MÃ VÀ TẢI TỆP MEGA.NZ (THƯ MỤC & FILE ĐƠN LẺ) -----------------
+def download_mega(url: str, target_dir: str) -> bool:
+    clean_u = url.strip()
+    log(f"☁️ Đang xử lý liên kết MEGA: {clean_u}")
+    
+    # 1. Nhận diện Thư mục MEGA (mega.nz/folder/ID#KEY hoặc mega.nz/#F!ID!KEY)
+    m_folder = re.search(r'mega\.nz/(?:folder/|#F!)([a-zA-Z0-9_-]+)[#!]([a-zA-Z0-9_-]+)', clean_u)
+    if m_folder:
+        folder_id = m_folder.group(1)
+        folder_key = m_folder.group(2)
+        try:
+            master_key = b64_url_decode(folder_key)
+            if len(master_key) < 16:
+                return False
+            master_key = master_key[:16]
+
+            # Gọi API lấy cây thư mục
+            api_url = f"https://g.api.mega.co.nz/cs?id=0&n={folder_id}"
+            res = global_session.post(api_url, json=[{"a": "f", "c": 1, "r": 1, "ca": 1}], timeout=25)
+            res_data = res.json()
+            if not isinstance(res_data, list) or len(res_data) == 0:
+                return False
+
+            nodes = res_data[0].get("f", [])
+            downloaded_count = 0
+
+            for node in nodes:
+                # Chỉ lọc lấy file (t == 0)
+                if node.get("t") == 0 and "k" in node:
+                    k_str = node["k"]
+                    enc_key_b64 = k_str.split(":")[-1]
+                    enc_key = b64_url_decode(enc_key_b64)
+
+                    if len(enc_key) >= 32:
+                        dec_ecb = get_aes_ecb_decrypter(master_key)
+                        raw_key = dec_ecb(enc_key[:32])
+
+                        k_ints = struct.unpack(">8I", raw_key)
+                        real_key = struct.pack(">4I", k_ints[0] ^ k_ints[4], k_ints[1] ^ k_ints[5], k_ints[2] ^ k_ints[6], k_ints[3] ^ k_ints[7])
+                        iv = struct.pack(">4I", k_ints[4], k_ints[5], 0, 0)
+
+                        # Giải mã tên tệp
+                        file_name = f"mega_{node['h']}.mp4"
+                        if node.get("a"):
+                            try:
+                                enc_a = b64_url_decode(node["a"])
+                                dec_cbc = get_aes_cbc_decrypter(real_key, b"\x00" * 16)
+                                dec_a = dec_cbc(enc_a)
+                                if b"MEGA{" in dec_a:
+                                    start_p = dec_a.find(b"MEGA{") + 4
+                                    raw_j = dec_a[start_p:].split(b"\x00")[0].decode("utf-8", errors="ignore")
+                                    r_idx = raw_j.rfind("}")
+                                    if r_idx != -1:
+                                        raw_j = raw_j[:r_idx+1]
+                                    attr_d = json.loads(raw_j)
+                                    file_name = attr_d.get("n", file_name)
+                            except Exception as e:
+                                log(f"Lỗi giải mã tên tệp MEGA: {e}")
+
+                        file_name = sanitize_filename(file_name)
+                        if not any(file_name.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".png", ".pdf"]):
+                            file_name += ".mp4"
+
+                        # Yêu cầu link tải file
+                        dl_req = [{"a": "g", "g": 1, "n": node["h"]}]
+                        dl_res = global_session.post(f"https://g.api.mega.co.nz/cs?id=1&n={folder_id}", json=dl_req, timeout=25)
+                        dl_data = dl_res.json()
+                        if isinstance(dl_data, list) and len(dl_data) > 0 and isinstance(dl_data[0], dict) and "g" in dl_data[0]:
+                            dl_url = dl_data[0]["g"]
+                            log(f"📥 Đang tải và giải mã video MEGA: {file_name} ({format_size(node.get('s', 0))})...")
+                            stream_res = global_session.get(dl_url, stream=True, timeout=(30, 480))
+                            save_path = os.path.join(target_dir, file_name)
+                            dec_ctr = get_aes_ctr_decrypter(real_key, iv)
+
+                            with open(save_path, "wb") as f_out:
+                                for chunk in stream_res.iter_content(chunk_size=1024 * 1024):
+                                    if chunk:
+                                        f_out.write(dec_ctr(chunk))
+
+                            if os.path.exists(save_path) and os.path.getsize(save_path) > 1000:
+                                log(f"✅ Đã tải và giải mã thành công: {file_name} ({format_size(os.path.getsize(save_path))})")
+                                downloaded_count += 1
+
+            return downloaded_count > 0
+        except Exception as e:
+            log(f"Lỗi xử lý thư mục MEGA: {e}")
+
+    # 2. Nhận diện Tệp MEGA đơn lẻ (mega.nz/file/ID#KEY hoặc mega.nz/#!ID!KEY)
+    m_file = re.search(r'mega\.nz/(?:file/|#!)([a-zA-Z0-9_-]+)[#!]([a-zA-Z0-9_-]+)', clean_u)
+    if m_file:
+        file_id = m_file.group(1)
+        file_key = m_file.group(2)
+        try:
+            enc_key = b64_url_decode(file_key)
+            if len(enc_key) >= 32:
+                k_ints = struct.unpack(">8I", enc_key[:32])
+                real_key = struct.pack(">4I", k_ints[0] ^ k_ints[4], k_ints[1] ^ k_ints[5], k_ints[2] ^ k_ints[6], k_ints[3] ^ k_ints[7])
+                iv = struct.pack(">4I", k_ints[4], k_ints[5], 0, 0)
+
+                dl_res = global_session.post("https://g.api.mega.co.nz/cs?id=0", json=[{"a": "g", "g": 1, "p": file_id}], timeout=25)
+                dl_data = dl_res.json()
+                if isinstance(dl_data, list) and len(dl_data) > 0 and isinstance(dl_data[0], dict) and "g" in dl_data[0]:
+                    dl_url = dl_data[0]["g"]
+                    file_name = f"mega_{file_id}.mp4"
+                    if dl_data[0].get("at"):
+                        try:
+                            enc_a = b64_url_decode(dl_data[0]["at"])
+                            dec_cbc = get_aes_cbc_decrypter(real_key, b"\x00" * 16)
+                            dec_a = dec_cbc(enc_a)
+                            if b"MEGA{" in dec_a:
+                                start_p = dec_a.find(b"MEGA{") + 4
+                                raw_j = dec_a[start_p:].split(b"\x00")[0].decode("utf-8", errors="ignore")
+                                r_idx = raw_j.rfind("}")
+                                if r_idx != -1:
+                                    raw_j = raw_j[:r_idx+1]
+                                attr_d = json.loads(raw_j)
+                                file_name = attr_d.get("n", file_name)
+                        except Exception:
+                            pass
+
+                    file_name = sanitize_filename(file_name)
+                    if not any(file_name.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".png", ".pdf"]):
+                        file_name += ".mp4"
+
+                    log(f"📥 Đang tải và giải mã video đơn lẻ MEGA: {file_name}...")
+                    stream_res = global_session.get(dl_url, stream=True, timeout=(30, 480))
+                    save_path = os.path.join(target_dir, file_name)
+                    dec_ctr = get_aes_ctr_decrypter(real_key, iv)
+
+                    with open(save_path, "wb") as f_out:
+                        for chunk in stream_res.iter_content(chunk_size=1024 * 1024):
+                            if chunk:
+                                f_out.write(dec_ctr(chunk))
+
+                    if os.path.exists(save_path) and os.path.getsize(save_path) > 1000:
+                        log(f"✅ Đã tải và giải mã thành công: {file_name} ({format_size(os.path.getsize(save_path))})")
+                        return True
+        except Exception as e:
+            log(f"Lỗi xử lý file đơn lẻ MEGA: {e}")
+
+    return False
+
+# ----------------- GIẢI MÃ VÀ TẢI TỆP ONEDRIVE -----------------
 def _save_stream_to_file(res, target_dir: str, default_name: str = "proof_file") -> bool:
     try:
         content_disposition = res.headers.get("Content-Disposition", "")
@@ -597,49 +794,85 @@ def _save_stream_to_file(res, target_dir: str, default_name: str = "proof_file")
                     f.write(chunk)
 
         if os.path.exists(save_path) and os.path.getsize(save_path) > 500:
-            print(f"📥 Đã tải thành công: {clean_name} ({format_size(os.path.getsize(save_path))})")
+            log(f"📥 Đã tải thành công: {clean_name} ({format_size(os.path.getsize(save_path))})")
             return True
         if os.path.exists(save_path):
             os.remove(save_path)
     except Exception as e:
-        print(f"Lỗi lưu file: {e}")
+        log(f"Lỗi lưu file: {e}")
     return False
 
 def download_onedrive(url: str, target_dir: str) -> bool:
-    clean_url = url.strip()
+    clean_u = url.strip()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*"
     }
 
-    # Cách 1: Sử dụng Microsoft Graph Shares API (Tải trực tiếp bỏ qua giao diện web)
     try:
-        encoded = base64.urlsafe_b64encode(clean_url.encode('utf-8')).decode('utf-8').rstrip('=')
-        api_url = f"https://api.onedrive.com/v1.0/shares/u!{encoded}/root/content"
-        res = global_session.get(api_url, headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
-        if res.status_code in [200, 206] and "text/html" not in res.headers.get("Content-Type", "").lower():
-            return _save_stream_to_file(res, target_dir, "onedrive_proof.mp4")
+        sep = "&" if "?" in clean_u else "?"
+        direct_try_url = f"{clean_u}{sep}download=1"
+        res = global_session.get(direct_try_url, headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
+        ct = res.headers.get("Content-Type", "").lower()
+        if res.status_code in [200, 206] and "text/html" not in ct:
+            log("🔗 Bắt thành công luồng CDN tải OneDrive qua download=1!")
+            return _save_stream_to_file(res, target_dir, "onedrive_video.mp4")
     except Exception as e:
-        print(f"Lỗi Graph Shares API OneDrive: {e}")
+        log(f"Lỗi bước 1 OneDrive: {e}")
 
-    # Cách 2: Bóc tách liên kết tải ẩn trong mã nguồn
     try:
-        r = global_session.get(clean_url, headers=headers, allow_redirects=True, timeout=15, verify=False)
-        m = re.search(r'"(?:downloadUrl|@content\.downloadUrl)":\s*"([^"]+)"', r.text)
-        if m:
-            direct_dl = m.group(1).replace(r'\u0026', '&').replace(r'\/', '/')
-            res_dl = global_session.get(direct_dl, headers=headers, stream=True, timeout=(20, 300), verify=False)
-            if res_dl.status_code in [200, 206] and "text/html" not in res_dl.headers.get("Content-Type", "").lower():
-                return _save_stream_to_file(res_dl, target_dir, "onedrive_proof.mp4")
+        r = global_session.get(clean_u, headers=headers, allow_redirects=True, timeout=15, verify=False)
+        dest_url = r.url
+        dest_html = r.text
 
-        final_dest = r.url
-        if "onedrive.live.com" in final_dest or "1drv.ms" in final_dest:
-            sep = "&" if "?" in final_dest else "?"
-            res_dl2 = global_session.get(f"{final_dest}{sep}download=1", headers=headers, stream=True, timeout=(20, 300), verify=False)
-            if res_dl2.status_code in [200, 206] and "text/html" not in res_dl2.headers.get("Content-Type", "").lower():
-                return _save_stream_to_file(res_dl2, target_dir, "onedrive_proof.mp4")
+        cid_match = re.search(r'cid=([a-fA-F0-9]+)', dest_url) or re.search(r'/c/([a-fA-F0-9]+)', clean_u)
+        id_match = re.search(r'[?&]id=([^&]+)', dest_url) or re.search(r'[?&]resid=([^&]+)', dest_url)
+        auth_match = re.search(r'[?&]authkey=([^&]+)', dest_url) or re.search(r'/c/[a-fA-F0-9]+/([a-zA-Z0-9_-]+)', clean_u)
+
+        cid = cid_match.group(1) if cid_match else ""
+        resid = urllib.parse.unquote(id_match.group(1)) if id_match else ""
+        authkey = auth_match.group(1) if auth_match else ""
+
+        if not resid:
+            p_match = re.search(r'photosData=([^&]+)', dest_url)
+            if p_match:
+                decoded_p = urllib.parse.unquote(p_match.group(1))
+                m_share = re.search(r'/share/([^?&]+)', decoded_p)
+                if m_share:
+                    resid = m_share.group(1)
+
+        candidates = []
+        if resid and authkey:
+            candidates.append(f"https://onedrive.live.com/download?resid={resid}&authkey={authkey}")
+            candidates.append(f"https://onedrive.live.com/download?resid={resid}&authkey=!{authkey}")
+        if cid and resid:
+            candidates.append(f"https://onedrive.live.com/download?cid={cid}&resid={resid}")
+        if resid:
+            candidates.append(f"https://onedrive.live.com/download?resid={resid}")
+
+        for cand in candidates:
+            try:
+                res_cand = global_session.get(cand, headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
+                if res_cand.status_code in [200, 206] and "text/html" not in res_cand.headers.get("Content-Type", "").lower():
+                    log(f"🔗 Bắt thành công liên kết download trực tiếp: {cand}")
+                    return _save_stream_to_file(res_cand, target_dir, "onedrive_video.mp4")
+            except Exception:
+                continue
+
+        unescaped = html.unescape(dest_html).replace(r'\"', '"').replace(r'\/', '/').replace(r'\u0026', '&')
+        cdn_links = re.findall(r'https?://[a-zA-Z0-9\.\-]+(?:microsoftpersonalcontent\.com|1drv\.com|storage\.live\.com)[^\s"\'<>]+', unescaped)
+        for cdn_u in cdn_links:
+            if any(k in cdn_u for k in ["download", "content", "stream", "tempurl"]):
+                try:
+                    res_cdn = global_session.get(cdn_u, headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
+                    if res_cdn.status_code in [200, 206] and "text/html" not in res_cdn.headers.get("Content-Type", "").lower():
+                        log("🔗 Bắt thành công tệp qua CDN ngầm!")
+                        return _save_stream_to_file(res_cdn, target_dir, "onedrive_video.mp4")
+                except Exception:
+                    continue
+
     except Exception as e:
-        print(f"Lỗi scrape OneDrive: {e}")
+        log(f"Lỗi cào dữ liệu OneDrive: {e}")
 
     return False
 
@@ -662,7 +895,7 @@ def resolve_short_url(url: str) -> str:
             html_text = r.text
             unescaped = html.unescape(html_text).replace(r'\/', '/').replace(r'\u002f', '/').replace(r'\u002F', '/')
             
-            m_target = re.search(r'(https?://(?:drive\.google\.com|1drv\.ms|onedrive\.live\.com|[a-zA-Z0-9\.\-]*fptcloud\.com)[^\s"\'<>]+)', unescaped)
+            m_target = re.search(r'(https?://(?:mega\.nz|drive\.google\.com|1drv\.ms|onedrive\.live\.com|[a-zA-Z0-9\.\-]*fptcloud\.com)[^\s"\'<>]+)', unescaped)
             if m_target:
                 return m_target.group(1)
 
@@ -743,7 +976,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
 
     return False
 
-# ----------------- BÓC TÁCH VÀ TẢI THƯ MỤC GOOGLE DRIVE -----------------
 def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
     folder_match = re.search(r'/folders/([a-zA-Z0-9_-]+)', folder_url)
     folder_id = folder_match.group(1) if folder_match else ""
@@ -781,18 +1013,27 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 # ----------------- ĐIỀU PHỐI TẢI XUỐNG CHO MỌI ĐỊNH DẠNG LINK -----------------
 def download_proof(url: str, target_dir: str) -> bool:
     clean_u = url.strip()
+
+    # 🌟 1. Ưu tiên xử lý link MEGA.NZ ngay từ đầu để giữ nguyên chuỗi sau dấu #
+    if "mega.nz" in clean_u.lower():
+        return download_mega(clean_u, target_dir)
+
     if any(s in clean_u.lower() for s in ["bom.so", "byvn.net", "bit.ly", "l1nk.dev"]):
         final_url = resolve_short_url(clean_u)
     else:
         final_url = clean_u
 
-    print(f"📥 Đang tải liên kết: {final_url}")
+    log(f"📥 Đang tải liên kết: {final_url}")
 
-    # 1. OneDrive
+    # Nếu sau khi giải mã link rút gọn ra link MEGA
+    if "mega.nz" in final_url.lower():
+        return download_mega(final_url, target_dir)
+
+    # 2. OneDrive (1drv.ms / onedrive.live.com)
     if "1drv.ms" in final_url.lower() or "onedrive.live.com" in final_url.lower():
         return download_onedrive(final_url, target_dir)
 
-    # 2. Google Drive
+    # 3. Google Drive
     if any(k in final_url for k in ["drive.google.com", "drive.usercontent.google.com"]):
         if "/folders/" in final_url or "embeddedfolderview" in final_url:
             return download_gdrive_folder(final_url, target_dir)
@@ -801,7 +1042,7 @@ def download_proof(url: str, target_dir: str) -> bool:
             if m:
                 return download_single_gdrive_file(m.group(1), target_dir)
 
-    # 3. Tải trực tiếp (FPT Cloud Tiki WMS, Alibaba, CDN)
+    # 4. Tải trực tiếp (FPT Cloud Tiki WMS, Alibaba, CDN)
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -817,7 +1058,7 @@ def download_proof(url: str, target_dir: str) -> bool:
                 raw_n += ".mp4"
             return _save_stream_to_file(res, target_dir, raw_n)
     except Exception as e:
-        print(f"Lỗi tải trực tiếp: {e}")
+        log(f"Lỗi tải trực tiếp: {e}")
 
     return False
 
@@ -827,7 +1068,6 @@ def extract_urls_from_text(raw_text: str) -> list:
     text = urllib.parse.unquote(text)
     text = text.replace(r"\/", "/").replace(r"\u002f", "/").replace(r"\u002F", "/")
     
-    # Tìm kiếm chính xác các đường link bắt đầu bằng http:// hoặc https://
     found = re.findall(r'https?://[^\s"\'<>]+', text)
     cleaned = [u.rstrip(';>,.()[]\'"') for u in found if u.startswith("http") and len(u) > 10]
     return list(dict.fromkeys(cleaned))
@@ -864,7 +1104,7 @@ def extract_message_text(message: dict) -> str:
 
 # ----------------- 7. XỬ LÝ CHÍNH & PHẢN HỒI THẺ CHO TỪNG TICKET -----------------
 def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: list, sender_id: str):
-    print(f"📥 BẮT ĐẦU XỬ LÝ ĐƠN: {ticket_id} (Tổng link: {len(urls)})")
+    log(f"📥 BẮT ĐẦU XỬ LÝ ĐƠN: {ticket_id} (Tổng link: {len(urls)})")
     clock_rx_id = add_reaction_to_message(message_id, "AlarmClock")
 
     try:
@@ -873,7 +1113,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         shutil.rmtree(task_temp_dir, ignore_errors=True)
         os.makedirs(task_temp_dir, exist_ok=True)
 
-        # Tải dữ liệu các đường link
         for u in urls:
             download_proof(u, task_temp_dir)
 
@@ -898,7 +1137,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         # THẺ BÁO LỖI NẾU KHÔNG CÓ TỆP NÀO ĐƯỢC TẢI
         if not final_files:
-            print(f"❌ Không tải được file nào cho đơn {ticket_id}")
+            log(f"❌ Không tải được file nào cho đơn {ticket_id}")
             if clock_rx_id:
                 remove_reaction_from_message(message_id, clock_rx_id)
 
@@ -950,7 +1189,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         summary_group_str = "\n".join(group_lines)
         repeat_tag = f"**<text_tag color='carmine'>📋 Lần {req_count}</text_tag>**" if req_count > 1 else "**<text_tag color='carmine'>📋 Lần 1</text_tag>**"
 
-        # ---------------- THẺ 1: XUẤT HIỆN NGAY LẬP TỨC ----------------
+        # ---------------- THẺ 1: XUẤT HIỆN TỨC THÌ ----------------
         file_lines = [f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>" for item in final_files]
         files_str = "\n".join(file_lines)
 
@@ -975,7 +1214,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                 build_footer_element(repeat_tag)
             ]
         }
-        # Gửi Card 1 ngay lập tức sau 2-4 giây
         reply_thread_card(message_id, loading_card_payload)
 
         # ---------------- BUNG TỆP VÀO THREAD ----------------
@@ -1011,7 +1249,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         gc.collect()
 
     except Exception as e:
-        print(f"Lỗi trong process_single_task: {e}")
+        log(f"Lỗi trong process_single_task: {e}")
         if clock_rx_id:
             remove_reaction_from_message(message_id, clock_rx_id)
 
@@ -1057,20 +1295,24 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         text = extract_message_text(msg_dict)
 
         if "http://" in text or "https://" in text:
-            print(f"📩 [LARK] ĐÃ BẮT ĐƯỢC LINK MỚI: {text[:80]}...")
+            log(f"📩 [LARK] BẮT ĐƯỢC TIN NHẮN CHỨA LINK: {text[:60]}...")
             t = threading.Thread(target=parse_and_dispatch, args=(msg.message_id, chat_id, text, sender_id))
             t.daemon = True
             t.start()
     except Exception as e:
-        print(f"Lỗi message: {e}")
+        log(f"Lỗi message: {e}")
+
+def handle_message_updated(data: Any) -> None:
+    pass
 
 # ----------------- 8. KHỞI CHẠY WEBSOCKET AUTO-RECONNECT -----------------
 def start_bot():
-    print("🚀 BOT LARK PROOF KHỞI ĐỘNG...")
+    log("🚀 BOT LARK PROOF KHỞI ĐỘNG...")
     while True:
         try:
             builder = lark.EventDispatcherHandler.builder("", "")
             builder.register_p2_im_message_receive_v1(handle_message)
+            builder.register_p2_im_message_updated_v1(handle_message_updated)
             event_handler = builder.build()
 
             ws_client = lark.ws.Client(
@@ -1082,7 +1324,7 @@ def start_bot():
             )
             ws_client.start()
         except Exception as e:
-            print(f"⚠️ Mất kết nối WebSocket: {e}. Tự động kết nối lại sau 5s...")
+            log(f"⚠️ Mất kết nối WebSocket: {e}. Kết nối lại sau 5s...")
             time.sleep(5)
 
 if __name__ == "__main__":
