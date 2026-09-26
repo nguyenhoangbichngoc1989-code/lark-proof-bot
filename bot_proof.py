@@ -408,7 +408,7 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
 
         if os.path.exists(file_path) and os.path.getsize(file_path) > 32:
             with open(file_path, "rb") as f:
-                header = f.read(128)
+                header = f.read(512)
 
             if header.startswith(b"%PDF"):
                 if ext != ".pdf":
@@ -425,7 +425,14 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
                     return new_p
                 return file_path
 
-            if header.startswith(b"\x1a\x45\xdf\xa3") or b"ftyp" in header[:32] or b"moov" in header[:64] or b"mdat" in header[:64]:
+            is_video = (
+                header.startswith(b"\x1a\x45\xdf\xa3") or
+                header.startswith(b"FLV") or
+                (header.startswith(b"RIFF") and b"AVI " in header[8:16]) or
+                any(box in header[:128] for box in [b"ftyp", b"moov", b"mdat", b"wide", b"free", b"qt  "])
+            )
+
+            if is_video or (not ext and os.path.getsize(file_path) > 300 * 1024):
                 if ext not in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
                     new_p = os.path.join(dir_name, f"{name}.mp4")
                     os.rename(file_path, new_p)
@@ -787,7 +794,7 @@ def _save_stream_to_file(res, target_dir: str, default_name: str = "proof_file")
         raw_name = extracted_name or default_name
         ct = res.headers.get("Content-Type", "").lower()
         if not any(raw_name.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".jpeg", ".png", ".pdf"]):
-            if "video" in ct or "mp4" in ct:
+            if "video" in ct or "mp4" in ct or "octet-stream" in ct:
                 raw_name += ".mp4"
             elif "pdf" in ct:
                 raw_name += ".pdf"
@@ -936,7 +943,17 @@ def download_onedrive(url: str, target_dir: str) -> bool:
 
     return False
 
-# ----------------- GIẢI MÃ ĐA TẦNG CHO BOM.SO, BYVN.NET, BIT.LY -----------------
+# ----------------- 🌟 DANH SÁCH CÁC TÊN MIỀN RÚT GỌN -----------------
+SHORT_DOMAINS = [
+    "byvn.net", "by.com.vn", "bom.so", "bit.ly", "l1nk.dev",
+    "tinyurl.com", "t.ly", "shorturl.at", "cutt.ly", "is.gd", "rb.gy", "s.id"
+]
+
+def is_short_url(u: str) -> bool:
+    u_low = u.lower()
+    return any(d in u_low for d in SHORT_DOMAINS)
+
+# ----------------- 🌟 GIẢI MÃ ĐA TẦNG CHO BYVN.NET, BOM.SO, BIT.LY -----------------
 def resolve_short_url(url: str) -> str:
     cur_url = url.strip()
     headers = {
@@ -945,35 +962,87 @@ def resolve_short_url(url: str) -> str:
         "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
     }
 
-    for _ in range(3):
-        try:
-            r = global_session.get(cur_url, headers=headers, allow_redirects=True, timeout=12, verify=False)
-            final_url = r.url
-            if not any(s in final_url.lower() for s in ["bom.so", "byvn.net", "l1nk.dev", "bit.ly"]):
-                return final_url
-            
-            html_text = r.text
-            unescaped = html.unescape(html_text).replace(r'\/', '/').replace(r'\u002f', '/').replace(r'\u002F', '/')
-            
-            m_target = re.search(r'(https?://(?:mega\.nz|drive\.google\.com|1drv\.ms|onedrive\.live\.com|[a-zA-Z0-9\.\-]*fptcloud\.com)[^\s"\'<>]+)', unescaped)
-            if m_target:
-                return m_target.group(1)
+    for hop in range(6):
+        if not is_short_url(cur_url):
+            return cur_url
 
+        # Bước A: Kiểm tra tiêu đề Location (0.1 giây, không tải file video)
+        try:
+            r_no_redir = global_session.get(cur_url, headers=headers, allow_redirects=False, timeout=8, verify=False)
+            if r_no_redir.status_code in [301, 302, 303, 307, 308] and "Location" in r_no_redir.headers:
+                loc = r_no_redir.headers["Location"].strip()
+                if not loc.startswith("http"):
+                    loc = urllib.parse.urljoin(cur_url, loc)
+                log(f"🔗 Bắt Location header ({r_no_redir.status_code}): {loc[:80]}...")
+                cur_url = loc
+                continue
+        except Exception as e:
+            log(f"Lưu ý kiểm tra Location: {e}")
+
+        # Bước B: Theo dõi chuyển hướng bằng stream=True (chỉ lấy link cuối, không tải thân file)
+        try:
+            r_stream = global_session.get(cur_url, headers=headers, allow_redirects=True, stream=True, timeout=12, verify=False)
+            dest = r_stream.url
+            r_stream.close()
+            if dest and not is_short_url(dest):
+                log(f"🔗 Bắt URL đích qua stream redirect: {dest[:80]}...")
+                return dest
+        except Exception as e:
+            log(f"Lưu ý stream redirect: {e}")
+
+        # Bước C: Bóc tách mã nguồn HTML nếu là trang trung gian
+        try:
+            r_html = global_session.get(cur_url, headers=headers, timeout=10, verify=False)
+            html_text = r_html.text
+            unescaped = html.unescape(html_text).replace(r'\/', '/').replace(r'\u002f', '/').replace(r'\u002F', '/')
+
+            # 1. Meta refresh
             meta_m = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', html_text, re.IGNORECASE)
             if meta_m:
-                cur_url = urllib.parse.urljoin(final_url, meta_m.group(1))
-                continue
-
-            js_m = re.search(r'(?:window\.location(?:\.href)?|location\.replace|location\.href)\s*=\s*["\']([^"\']+)["\']', html_text)
-            if js_m:
-                cand = js_m.group(1)
-                if cand.startswith("http") and not any(s in cand for s in ["bom.so", "byvn.net"]):
-                    return cand
+                cand = meta_m.group(1).strip()
+                if not cand.startswith("http"):
+                    cand = urllib.parse.urljoin(cur_url, cand)
+                log(f"🔗 Tìm thấy link trong meta refresh: {cand[:80]}...")
                 cur_url = cand
                 continue
-            break
-        except Exception:
-            break
+
+            # 2. JavaScript redirect
+            js_m = re.search(r'(?:window\.location(?:\.href)?|location\.replace|location\.href|window\.location\.assign)\s*(?:=|\()\s*["\']([^"\']+)["\']', html_text)
+            if js_m:
+                cand = js_m.group(1).strip()
+                if cand.startswith("http"):
+                    log(f"🔗 Tìm thấy link trong JS redirect: {cand[:80]}...")
+                    cur_url = cand
+                    continue
+
+            # 3. Quét tất cả URL trong HTML, loại trừ các domain rút gọn và tracking/assets
+            found_urls = re.findall(r'https?://[^\s"\'<>\\]+', unescaped)
+            found_target = ""
+            for cand in found_urls:
+                cand_clean = cand.rstrip(';,."\')]>')
+                cand_low = cand_clean.lower()
+                if any(ign in cand_low for ign in [
+                    "byvn.net", "by.com.vn", "bom.so", "bit.ly", "l1nk.dev",
+                    "cloudflare", "facebook.com", "google.com", "googleapis.com", "gstatic.com",
+                    "w3.org", "schema.org", "jsdelivr", "cdnjs", "nel.cloudflare", "twitter.com", "zalo.me"
+                ]):
+                    continue
+                if any(k in cand_low for k in ["aliyuncs.com", "rc-upload", "fptcloud.com", "drive.google.com", "1drv.ms", "onedrive.live.com", "mega.nz", ".mp4", ".pdf", ".mov"]):
+                    found_target = cand_clean
+                    break
+                if not found_target:
+                    found_target = cand_clean
+
+            if found_target:
+                log(f"🎯 Bóc tách thành công link ẩn trong HTML: {found_target[:80]}...")
+                cur_url = found_target
+                continue
+
+        except Exception as e:
+            log(f"Lỗi phân tích HTML trang rút gọn: {e}")
+
+        break
+
     return cur_url
 
 # ----------------- TẢI FILE GOOGLE DRIVE VƯỢT QUA TRANG CẢNH BÁO VI-RÚT -----------------
@@ -1082,7 +1151,8 @@ def download_proof(url: str, target_dir: str) -> bool:
     if "1drv.ms" in clean_u.lower() or "onedrive.live.com" in clean_u.lower():
         return download_onedrive(clean_u, target_dir)
 
-    if any(s in clean_u.lower() for s in ["bom.so", "byvn.net", "bit.ly", "l1nk.dev"]):
+    # 🌟 Giải mã toàn diện mọi liên kết rút gọn
+    if is_short_url(clean_u):
         final_url = resolve_short_url(clean_u)
     else:
         final_url = clean_u
@@ -1104,7 +1174,7 @@ def download_proof(url: str, target_dir: str) -> bool:
             if m:
                 return download_single_gdrive_file(m.group(1), target_dir)
 
-    # 4. Tải trực tiếp (FPT Cloud Tiki WMS, Alibaba, CDN)
+    # 4. Tải trực tiếp (Alibaba Cloud OSS, FPT Cloud Tiki WMS, CDN)
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -1113,10 +1183,10 @@ def download_proof(url: str, target_dir: str) -> bool:
         res = global_session.get(final_url, headers=headers, stream=True, timeout=(25, 400), verify=False)
         if res.status_code in [200, 206]:
             ct = res.headers.get("Content-Type", "").lower()
-            if "text/html" in ct and "fptcloud" not in final_url:
+            if "text/html" in ct and not any(k in final_url for k in ["fptcloud", "aliyuncs"]):
                 return False
             raw_n = os.path.basename(urllib.parse.urlparse(final_url).path) or "proof_media"
-            if "fptcloud.com" in final_url and not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".png", ".pdf"]):
+            if any(k in final_url for k in ["fptcloud.com", "aliyuncs.com", "rc-upload"]) and not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".png", ".pdf"]):
                 raw_n += ".mp4"
             return _save_stream_to_file(res, target_dir, raw_n)
     except Exception as e:
