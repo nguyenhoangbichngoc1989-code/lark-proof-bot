@@ -109,8 +109,8 @@ TEMP_DIR = os.path.join(BASE_DIR, "temp_files")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
 
 BANNER_CARD1_KEY = "img_v3_0215r_61dad065-35d7-45ba-a33d-6ab073a717ah"      # Thẻ 1: Loading
-BANNER_ERROR_KEY = "img_v3_0215r_6e344d17-b29f-4de6-a147-177aa11fa62h"      # Thẻ Báo Lỗi
-BANNER_COMPLETED_KEY = "img_v3_0215r_124a0bca-2990-426a-8cf2-c72aeadb7fdh"  # Thẻ 2: Hoàn Tất
+BANNER_ERROR_KEY = "img_v3_0215t_fa7798b2-b3e2-430f-a378-bdbbe603afxx.gif"  # Thẻ Báo Lỗi (Ảnh GIF mới)
+BANNER_COMPLETED_KEY = "img_v3_0215t_bc7fa34f-061c-4872-b310-f1811eb554xx.gif" # Thẻ 2: Hoàn Tất
 
 PROCESSED_MESSAGES = set()
 
@@ -166,6 +166,7 @@ def build_half_size_banner(img_key: str, alt_text: str = "Thông báo") -> list:
         }
     ]
 
+# ----------------- HÀM TẠO CALLOUT BOX CĂN CHÍNH GIỮA TUYỆT ĐỐI -----------------
 def build_highlight_box(content_md: str, bg_style: str = "carmine") -> dict:
     return {
         "tag": "column_set",
@@ -228,6 +229,7 @@ def build_centered_tag(tag_md: str) -> dict:
         ]
     }
 
+# 🌟 FOOTER: MƯA BÊN TRÁI - TAG SỐ LẦN ĐẾM (ĐỎ HỒNG CARMINE) Ở GÓC PHẢI
 def build_footer_element(repeat_tag_str: str = "") -> dict:
     columns = [
         {
@@ -963,7 +965,6 @@ KNOWN_URL_MAPPINGS = {
 def resolve_short_url(url: str) -> str:
     cur_url = url.strip()
 
-    # Kiểm tra bảng ánh xạ trực tiếp
     for k, v in KNOWN_URL_MAPPINGS.items():
         if k in cur_url.lower():
             log(f"🎯 Khớp link gốc từ bảng ánh xạ: {v[:80]}...")
@@ -979,7 +980,6 @@ def resolve_short_url(url: str) -> str:
         if not is_short_url(cur_url):
             return cur_url
 
-        # Tầng 1: HEAD request (0 byte tải dữ liệu)
         try:
             r_head = global_session.head(cur_url, headers=headers, allow_redirects=True, timeout=8, verify=False)
             if r_head.url and not is_short_url(r_head.url):
@@ -988,7 +988,6 @@ def resolve_short_url(url: str) -> str:
         except Exception:
             pass
 
-        # Tầng 2: GET stream=True theo dõi chuyển hướng mà không tải body video
         try:
             r_stream = global_session.get(cur_url, headers=headers, allow_redirects=True, stream=True, timeout=12, verify=False)
             dest = r_stream.url
@@ -1000,7 +999,6 @@ def resolve_short_url(url: str) -> str:
         except Exception as e:
             log(f"Lưu ý stream redirect: {e}")
 
-        # Tầng 3: Kiểm tra tiêu đề Location từng nấc
         try:
             r_no_redir = global_session.get(cur_url, headers=headers, allow_redirects=False, timeout=8, verify=False)
             if r_no_redir.status_code in [301, 302, 303, 307, 308] and "Location" in r_no_redir.headers:
@@ -1013,13 +1011,11 @@ def resolve_short_url(url: str) -> str:
         except Exception as e:
             log(f"Lưu ý kiểm tra Location: {e}")
 
-        # Tầng 4: Quét sâu mã nguồn HTML trang trung gian
         try:
             r_html = global_session.get(cur_url, headers=headers, timeout=10, verify=False)
             html_text = r_html.text
             unescaped = html.unescape(html_text).replace(r'\/', '/').replace(r'\u002f', '/').replace(r'\u002F', '/')
 
-            # 1. Meta refresh
             meta_m = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\'>\s]+)["\']', html_text, re.IGNORECASE)
             if meta_m:
                 cand = meta_m.group(1).strip()
@@ -1029,7 +1025,6 @@ def resolve_short_url(url: str) -> str:
                 cur_url = cand
                 continue
 
-            # 2. JavaScript redirect
             js_m = re.search(r'(?:window\.location(?:\.href)?|location\.replace|location\.href|window\.location\.assign)\s*(?:=|\()\s*["\']([^"\']+)["\']', html_text)
             if js_m:
                 cand = js_m.group(1).strip()
@@ -1038,7 +1033,6 @@ def resolve_short_url(url: str) -> str:
                     cur_url = cand
                     continue
 
-            # 3. Quét mọi URL trong HTML và tìm dịch vụ file
             found_urls = re.findall(r'https?://[^\s"\'<>\\]+', unescaped)
             found_target = ""
             for cand in found_urls:
@@ -1357,7 +1351,9 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
-        card1_top_highlight = build_centered_tag("**<text_tag color='carmine'>°•*⁀➷ 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘W𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; ➹*•°</text_tag>**")
+        
+        # 🌟 KHÔI PHỤC THANH CALLOUT BOX TRẢI DÀI TRÀN VIỀN CHO THẺ 1
+        card1_top_highlight = build_highlight_box("<font color='white'><b>°•*⁀➷ 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; ➹*•°</b></font>", bg_style="carmine")
         card1_bottom_highlight = build_centered_tag("**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ...</text_tag>**")
 
         loading_card_payload = {
@@ -1381,7 +1377,9 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         thankyou_md = "<font color='turquoise'>   ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
-        card2_top_highlight = build_centered_tag("**<text_tag color='turquoise'>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</text_tag>**")
+        
+        # 🌟 KHÔI PHỤC THANH CALLOUT BOX TRẢI DÀI TRÀN VIỀN CHO THẺ 2
+        card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
         card2_bottom_highlight = build_centered_tag("**<text_tag color='turquoise'>・❥Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**")
 
         finish_card_payload = {
