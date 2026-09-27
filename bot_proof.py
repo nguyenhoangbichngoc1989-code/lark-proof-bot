@@ -353,13 +353,15 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         base_name = os.path.splitext(original_name or os.path.basename(file_path))[0]
         base_name = re.sub(r'^(?:conv_[a-f0-9]{6}_|opt_[a-f0-9]{6}_|tmp_[a-zA-Z0-9]+_)', '', base_name)
         clean_base = sanitize_filename(base_name)
-        if clean_base.lower().endswith(".mp4"):
+        if clean_base.lower().endswith(".mov"):
+            clean_base = clean_base[:-4]
+        elif clean_base.lower().endswith(".mp4"):
             clean_base = clean_base[:-4]
 
-        temp_out = os.path.join(dir_name, f"tmp_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
-        final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
+        temp_out = os.path.join(dir_name, f"tmp_{uuid.uuid4().hex[:6]}_{clean_base}.mov")
+        final_mov = os.path.join(dir_name, f"{clean_base}.mov")
 
-        log(f"⚙️ Bắt đầu nén nhẹ tải cho video: {clean_base} ({size_mb:.2f} MB)...")
+        log(f"⚙️ Bắt đầu nén nhẹ tải cho video MOV: {clean_base} ({size_mb:.2f} MB)...")
 
         vf = "scale=640:360:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
         cmd = [
@@ -371,6 +373,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
             "-b:v", "350k", "-maxrate", "450k", "-bufsize", "700k",
             "-pix_fmt", "yuv420p",
             "-an",
+            "-f", "mov",
             "-movflags", "+faststart",
             temp_out
         ]
@@ -380,16 +383,16 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
 
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 10000:
             out_mb = os.path.getsize(temp_out) / (1024 * 1024)
-            log(f"✨ Nén video hoàn tất: {clean_base}.mp4 ({out_mb:.2f} MB)")
+            log(f"✨ Nén video hoàn tất: {clean_base}.mov ({out_mb:.2f} MB)")
             try:
-                if os.path.exists(final_mp4) and final_mp4 != temp_out:
-                    os.remove(final_mp4)
-                if os.path.exists(file_path) and file_path != temp_out and file_path != final_mp4:
+                if os.path.exists(final_mov) and final_mov != temp_out:
+                    os.remove(final_mov)
+                if os.path.exists(file_path) and file_path != temp_out and file_path != final_mov:
                     os.remove(file_path)
             except Exception:
                 pass
-            os.rename(temp_out, final_mp4)
-            return final_mp4
+            os.rename(temp_out, final_mov)
+            return final_mov
         else:
             if os.path.exists(temp_out):
                 os.remove(temp_out)
@@ -398,7 +401,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
 
     return file_path
 
-# ----------------- TỰ ĐỘNG NHẬN DIỆN ĐUÔI TỆP THEO MAGIC BYTES -----------------
+# ----------------- TỰ ĐỘNG NHẬN DIỆN VÀ ÉP ĐUÔI .MOV HOẶC .MP4 -----------------
 def auto_detect_and_fix_extension(file_path: str) -> str:
     try:
         dir_name = os.path.dirname(file_path)
@@ -432,9 +435,14 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
                 any(box in header[:128] for box in [b"ftyp", b"moov", b"mdat", b"wide", b"free", b"qt  "])
             )
 
+            # 🌟 Ép buộc tất cả tệp video sang đuôi .mov chuẩn xác theo yêu cầu
             if is_video or (not ext and os.path.getsize(file_path) > 300 * 1024):
-                if ext not in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
-                    new_p = os.path.join(dir_name, f"{name}.mp4")
+                if ext not in [".mov", ".mp4"]:
+                    new_p = os.path.join(dir_name, f"{name}.mov")
+                    os.rename(file_path, new_p)
+                    return new_p
+                elif ext == ".mp4":
+                    new_p = os.path.join(dir_name, f"{name}.mov")
                     os.rename(file_path, new_p)
                     return new_p
                 return file_path
@@ -541,8 +549,8 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                         actual_sent_count += 1
                         log(f"📄 Đã bung tệp PDF vào thread: {file_name}")
 
-            # 3. Tệp Video (bỏ qua nén nếu <= 32MB để bung siêu tốc)
-            elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
+            # 3. Tệp Video (.mov / .mp4)
+            elif file_ext in [".mov", ".mp4", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = f["path"]
                 if os.path.getsize(send_path) / (1024 * 1024) > 32.0:
                     send_path = compress_video_to_safe_mp4(file_path, original_name=file_name)
@@ -560,7 +568,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                     resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     if resp and resp.success():
                         actual_sent_count += 1
-                        log(f"📥 Đã bung video phát trực tiếp: {os.path.basename(send_path)}")
+                        log(f"📥 Đã bung video phát trực tiếp (.mov): {os.path.basename(send_path)}")
 
             # 4. Tệp khác
             else:
@@ -626,7 +634,6 @@ def download_mega(url: str, target_dir: str) -> bool:
     clean_u = url.strip()
     log(f"☁️ Đang xử lý liên kết MEGA: {clean_u}")
     
-    # 1. Nhận diện Thư mục MEGA
     m_folder = re.search(r'mega\.nz/(?:folder/|#F!)([a-zA-Z0-9_-]+)[#!]([a-zA-Z0-9_-]+)', clean_u)
     if m_folder:
         folder_id = m_folder.group(1)
@@ -660,7 +667,7 @@ def download_mega(url: str, target_dir: str) -> bool:
                         real_key = struct.pack(">4I", k_ints[0] ^ k_ints[4], k_ints[1] ^ k_ints[5], k_ints[2] ^ k_ints[6], k_ints[3] ^ k_ints[7])
                         iv = struct.pack(">4I", k_ints[4], k_ints[5], 0, 0)
 
-                        file_name = f"mega_{node['h']}.mp4"
+                        file_name = f"mega_{node['h']}.mov"
                         if node.get("a"):
                             try:
                                 enc_a = b64_url_decode(node["a"])
@@ -678,8 +685,8 @@ def download_mega(url: str, target_dir: str) -> bool:
                                 log(f"Lỗi giải mã tên tệp MEGA: {e}")
 
                         file_name = sanitize_filename(file_name)
-                        if not any(file_name.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".png", ".pdf"]):
-                            file_name += ".mp4"
+                        if not any(file_name.lower().endswith(x) for x in [".mov", ".mp4", ".jpg", ".png", ".pdf"]):
+                            file_name += ".mov"
 
                         dl_req = [{"a": "g", "g": 1, "n": node["h"]}]
                         dl_res = global_session.post(f"https://g.api.mega.co.nz/cs?id=1&n={folder_id}", json=dl_req, timeout=25)
@@ -704,7 +711,6 @@ def download_mega(url: str, target_dir: str) -> bool:
         except Exception as e:
             log(f"Lỗi xử lý thư mục MEGA: {e}")
 
-    # 2. Nhận diện Tệp MEGA đơn lẻ
     m_file = re.search(r'mega\.nz/(?:file/|#!)([a-zA-Z0-9_-]+)[#!]([a-zA-Z0-9_-]+)', clean_u)
     if m_file:
         file_id = m_file.group(1)
@@ -720,7 +726,7 @@ def download_mega(url: str, target_dir: str) -> bool:
                 dl_data = dl_res.json()
                 if isinstance(dl_data, list) and len(dl_data) > 0 and isinstance(dl_data[0], dict) and "g" in dl_data[0]:
                     dl_url = dl_data[0]["g"]
-                    file_name = f"mega_{file_id}.mp4"
+                    file_name = f"mega_{file_id}.mov"
                     if dl_data[0].get("at"):
                         try:
                             enc_a = b64_url_decode(dl_data[0]["at"])
@@ -738,8 +744,8 @@ def download_mega(url: str, target_dir: str) -> bool:
                             pass
 
                     file_name = sanitize_filename(file_name)
-                    if not any(file_name.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".png", ".pdf"]):
-                        file_name += ".mp4"
+                    if not any(file_name.lower().endswith(x) for x in [".mov", ".mp4", ".jpg", ".png", ".pdf"]):
+                        file_name += ".mov"
 
                     log(f"📥 Đang tải và giải mã video đơn lẻ MEGA: {file_name}...")
                     stream_res = global_session.get(dl_url, stream=True, timeout=(30, 480))
@@ -761,7 +767,6 @@ def download_mega(url: str, target_dir: str) -> bool:
 
 # ----------------- 5. GIẢI MÃ VÀ TẢI TỆP ONEDRIVE (MICROSOFT BADGER API) -----------------
 def get_badger_token() -> str:
-    """Lấy Badger OAuth Token ẩn từ Microsoft để giải mã các link OneDrive SPO mới"""
     try:
         url = "https://api-badgerp.svc.ms/v1.0/token"
         headers = {
@@ -793,9 +798,9 @@ def _save_stream_to_file(res, target_dir: str, default_name: str = "proof_file")
 
         raw_name = extracted_name or default_name
         ct = res.headers.get("Content-Type", "").lower()
-        if not any(raw_name.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".jpeg", ".png", ".pdf"]):
+        if not any(raw_name.lower().endswith(x) for x in [".mov", ".mp4", ".jpg", ".jpeg", ".png", ".pdf"]):
             if "video" in ct or "mp4" in ct or "octet-stream" in ct:
-                raw_name += ".mp4"
+                raw_name += ".mov"
             elif "pdf" in ct:
                 raw_name += ".pdf"
             elif "image" in ct:
@@ -835,15 +840,12 @@ def download_onedrive(url: str, target_dir: str) -> bool:
     }
 
     dest_url = clean_u
-    dest_html = ""
     try:
         r = global_session.get(clean_u, headers=headers, allow_redirects=True, timeout=15, verify=False)
         dest_url = r.url
-        dest_html = r.text
     except Exception as e:
         log(f"Lưu ý chuyển hướng OneDrive: {e}")
 
-    # BƯỚC 1: XỬ LÝ QUA MICROSOFT BADGER AUTHENTICATION API
     badger_token = get_badger_token()
     if badger_token:
         badger_headers = {
@@ -854,7 +856,6 @@ def download_onedrive(url: str, target_dir: str) -> bool:
         }
 
         candidates_share_keys = []
-
         b64_full = base64.urlsafe_b64encode(clean_u.encode('utf-8')).decode('utf-8').rstrip('=')
         candidates_share_keys.append(f"u!{b64_full}")
 
@@ -862,32 +863,10 @@ def download_onedrive(url: str, target_dir: str) -> bool:
         b64_no_q = base64.urlsafe_b64encode(clean_no_q.encode('utf-8')).decode('utf-8').rstrip('=')
         candidates_share_keys.append(f"u!{b64_no_q}")
 
-        m_path_token = re.search(r'/c/[a-zA-Z0-9_-]+/([a-zA-Z0-9_-]+)', clean_no_q)
-        if m_path_token:
-            candidates_share_keys.append(f"u!{m_path_token.group(1)}")
-            candidates_share_keys.append(m_path_token.group(1))
-
-        redeem_m = re.search(r'[?&]redeem=([^&]+)', dest_url)
-        if redeem_m:
-            candidates_share_keys.append(f"u!{redeem_m.group(1)}")
-            candidates_share_keys.append(redeem_m.group(1))
-
-        photos_m = re.search(r'[?&]photosData=([^&]+)', dest_url)
-        if photos_m:
-            try:
-                dec_p = urllib.parse.unquote(photos_m.group(1))
-                m_item = re.search(r'/share/([^?&]+)', dec_p)
-                if m_item:
-                    candidates_share_keys.append(f"u!{m_item.group(1)}")
-                    candidates_share_keys.append(m_item.group(1))
-            except Exception:
-                pass
-
         for sk in candidates_share_keys:
             api_endpoints = [
                 f"https://my.microsoftpersonalcontent.com/_api/v2.0/shares/{sk}/driveitem",
-                f"https://api.onedrive.com/v1.0/shares/{sk}/driveitem",
-                f"https://my.microsoftpersonalcontent.com/_api/v2.0/shares/{sk}/root"
+                f"https://api.onedrive.com/v1.0/shares/{sk}/driveitem"
             ]
 
             for ep in api_endpoints:
@@ -896,7 +875,7 @@ def download_onedrive(url: str, target_dir: str) -> bool:
                     if res_api.status_code == 200:
                         data = res_api.json()
                         dl_url = data.get("@content.downloadUrl") or data.get("@microsoft.graph.downloadUrl") or data.get("downloadUrl")
-                        fname = data.get("name") or "onedrive_video.mp4"
+                        fname = data.get("name") or "onedrive_video.mov"
                         if dl_url:
                             log(f"🎯 Bắt thành công luồng tải qua Badger API: {fname}")
                             res_dl = global_session.get(dl_url, headers=badger_headers, stream=True, timeout=(30, 480))
@@ -905,39 +884,11 @@ def download_onedrive(url: str, target_dir: str) -> bool:
                 except Exception:
                     continue
 
-        for sk in candidates_share_keys[:3]:
-            for content_ep in [
-                f"https://my.microsoftpersonalcontent.com/_api/v2.0/shares/{sk}/driveitem/content",
-                f"https://api.onedrive.com/v1.0/shares/{sk}/root/content"
-            ]:
-                try:
-                    res_c = global_session.get(content_ep, headers=badger_headers, stream=True, allow_redirects=True, timeout=(30, 480))
-                    if res_c.status_code in [200, 206] and "text/html" not in res_c.headers.get("Content-Type", "").lower():
-                        log("🎯 Tải trực tiếp thành công qua Badger Content Endpoint!")
-                        return _save_stream_to_file(res_c, target_dir, "onedrive_video.mp4")
-                except Exception:
-                    continue
-
-    # BƯỚC 2: CÁC PHƯƠNG ÁN DỰ PHÒNG TRUYỀN THỐNG
     try:
         sep = "&" if "?" in clean_u else "?"
         res_d1 = global_session.get(f"{clean_u}{sep}download=1", headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
         if res_d1.status_code in [200, 206] and "text/html" not in res_d1.headers.get("Content-Type", "").lower():
-            return _save_stream_to_file(res_d1, target_dir, "onedrive_video.mp4")
-    except Exception:
-        pass
-
-    try:
-        cid_m = re.search(r'cid=([a-fA-F0-9]+)', dest_url) or re.search(r'/c/([a-fA-F0-9]+)', clean_u)
-        id_m = re.search(r'[?&]id=([^&]+)', dest_url) or re.search(r'[?&]resid=([^&]+)', dest_url)
-        cid = cid_m.group(1) if cid_m else ""
-        resid = urllib.parse.unquote(id_m.group(1)) if id_m else ""
-
-        if cid and resid:
-            dl_cand = f"https://onedrive.live.com/download?cid={cid}&resid={resid}"
-            res_cand = global_session.get(dl_cand, headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
-            if res_cand.status_code in [200, 206] and "text/html" not in res_cand.headers.get("Content-Type", "").lower():
-                return _save_stream_to_file(res_cand, target_dir, "onedrive_video.mp4")
+            return _save_stream_to_file(res_d1, target_dir, "onedrive_video.mov")
     except Exception:
         pass
 
@@ -1087,19 +1038,25 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     }
     real_title = preferred_name or extract_gdrive_title(file_id)
 
-    try:
-        direct_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
-        res = global_session.get(direct_url, headers=headers, stream=True, verify=False, timeout=(30, 480))
-        if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", "").lower():
-            return _save_stream_to_file(res, target_dir, real_title or f"gdrive_{file_id}")
-    except Exception:
-        pass
+    # 🌟 Ép buộc chuyển đổi sang link download trực tiếp của Google Drive
+    direct_urls = [
+        f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t",
+        f"https://drive.usercontent.google.com/download?id={file_id}&export=download"
+    ]
+
+    for direct_url in direct_urls:
+        try:
+            res = global_session.get(direct_url, headers=headers, stream=True, verify=False, timeout=(30, 480))
+            if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", "").lower():
+                return _save_stream_to_file(res, target_dir, real_title or f"gdrive_{file_id}.mov")
+        except Exception:
+            pass
 
     try:
         init_url = f"https://drive.google.com/uc?export=download&id={file_id}"
         res = global_session.get(init_url, headers=headers, stream=True, verify=False, timeout=50)
         if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", "").lower():
-            return _save_stream_to_file(res, target_dir, real_title or f"gdrive_{file_id}")
+            return _save_stream_to_file(res, target_dir, real_title or f"gdrive_{file_id}.mov")
 
         html_text = res.text
         link_match = re.search(r'<a\s+[^>]*?id=["\']uc-download-link["\'][^>]*?href=["\']([^"\']+)["\']', html_text, re.IGNORECASE) or \
@@ -1111,13 +1068,13 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
                 confirmed_url = "https://drive.usercontent.google.com" + confirmed_url
             res_down = global_session.get(html.unescape(confirmed_url), headers={"Referer": res.url}, stream=True, verify=False, timeout=(30, 480))
             if res_down.status_code == 200 and "text/html" not in res_down.headers.get("Content-Type", "").lower():
-                return _save_stream_to_file(res_down, target_dir, real_title or f"gdrive_{file_id}")
+                return _save_stream_to_file(res_down, target_dir, real_title or f"gdrive_{file_id}.mov")
     except Exception:
         pass
 
     try:
         import gdown
-        fallback_path = os.path.join(target_dir, sanitize_filename(real_title or f"gdrive_{file_id}.mp4"))
+        fallback_path = os.path.join(target_dir, sanitize_filename(real_title or f"gdrive_{file_id}.mov"))
         output = gdown.download(id=file_id, output=fallback_path, quiet=False, fuzzy=True)
         if output and os.path.exists(output) and os.path.getsize(output) > 500:
             return True
@@ -1143,7 +1100,6 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
     found_files = {}
 
     try:
-        # Sử dụng phương pháp quét nhúng đồng thời để vượt qua tường lửa Google
         embed_urls = [
             f"https://drive.google.com/embeddedfolderview?id={folder_id}#list",
             f"https://drive.google.com/drive/folders/{folder_id}"
@@ -1218,8 +1174,8 @@ def download_proof(url: str, target_dir: str) -> bool:
                 return False
 
             raw_n = os.path.basename(urllib.parse.urlparse(actual_final_url).path) or "proof_media"
-            if any(k in actual_final_url.lower() for k in ["fptcloud.com", "aliyuncs.com", "rc-upload"]) and not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".jpg", ".png", ".pdf"]):
-                raw_n += ".mp4"
+            if any(k in actual_final_url.lower() for k in ["fptcloud.com", "aliyuncs.com", "rc-upload"]) and not any(raw_n.lower().endswith(x) for x in [".mov", ".mp4", ".jpg", ".png", ".pdf"]):
+                raw_n += ".mov"
             return _save_stream_to_file(res, target_dir, raw_n)
     except Exception as e:
         log(f"Lỗi tải trực tiếp: {e}")
@@ -1351,7 +1307,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, raw_urls:
         total_size = sum(x["size"] for x in final_files)
         file_count = len(final_files)
 
-        video_exts = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"}
+        video_exts = {".mov", ".mp4", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"}
         image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".jfif", ".svg", ".tiff"}
         audio_exts = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma", ".opus"}
 
