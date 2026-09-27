@@ -238,7 +238,7 @@ def build_footer_element(repeat_tag_str: str = "") -> dict:
             "elements": [
                 {
                     "tag": "markdown",
-                    "content": "🌧️**<font color='indigo'>ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ʜồɪ ᴄʜɪềᴜ, ᴛʀờɪ ᴍưᴀ...</font>** 🌧️"
+                    "content": "        🌧️**<font color='indigo'>ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ʜồɪ ᴄʜɪềᴜ, ᴛʀờɪ ᴍưᴀ...</font>** 🌧️"
                 }
             ]
         },
@@ -1359,12 +1359,12 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         repeat_tag = f"**<text_tag color='carmine'>📋 Lần {req_count}</text_tag>**" if req_count > 1 else "**<text_tag color='carmine'>📋 Lần 1</text_tag>**"
 
         # ---------------- THẺ 1: XUẤT HIỆN TỨC THÌ (ĐÃ BỎ DÒNG ĐẾM TỆP 1/1) ----------------
-        file_lines = [f"         <font color='carmine'>╰┄‌•  </font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>" for item in final_files]
+        file_lines = [f"         <font color='carmine'>╰┄‌•</font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>" for item in final_files]
         files_str = "\n".join(file_lines)
 
         header_block = (
             f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-            f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n\n"
+            f"   ╰┄▸💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n\n"
             f"{summary_group_str}\n\n"
             f"{files_str}"
         )
@@ -1388,14 +1388,14 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
         # ---------------- THẺ 2: HOÀN TẤT ----------------
-        title_side_md = "**<text_tag color='turquoise'>       Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
+        title_side_md = "  **<text_tag color='turquoise'>             Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
-        heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
+        heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      <font color='carmine'>╰┄‌•</font>🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
         thankyou_md = "<font color='turquoise'>           ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Cᴏᴍᴘʟᴇᴛᴇᴅ")
         card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
-        card2_bottom_highlight = build_centered_tag("**<text_tag color='turquoise'>・𝖣ᝪ𝖭𝖤・</text_tag>**")
+        card2_bottom_highlight = build_centered_tag(" **<text_tag color='turquoise'>・𝖣ᝪ𝖭𝖤・</text_tag>** ")
 
         finish_card_payload = {
             "elements": card2_img_element + [
