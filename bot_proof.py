@@ -238,7 +238,7 @@ def build_footer_element(repeat_tag_str: str = "") -> dict:
             "elements": [
                 {
                     "tag": "markdown",
-                    "content": "        🌧️**<font color='indigo'>ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ʜồɪ ᴄʜɪềᴜ, ᴛʀờɪ ᴍưᴀ...</font>** 🌧️"
+                    "content": "                  🌧️**<font color='indigo'>ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ʜồɪ ᴄʜɪềᴜ, ᴛʀờɪ ᴍưᴀ...</font>** 🌧️"
                 }
             ]
         },
@@ -412,6 +412,14 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
             with open(file_path, "rb") as f:
                 header = f.read(512)
 
+            # Loại bỏ nếu phát hiện file HTML/XML lỗi
+            if header.startswith(b"<!DOCTYPE") or header.startswith(b"<html") or b"<Error>" in header[:128]:
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
+                return ""
+
             if header.startswith(b"%PDF"):
                 if ext != ".pdf":
                     new_p = os.path.join(dir_name, f"{name}.pdf")
@@ -434,13 +442,9 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
                 any(box in header[:128] for box in [b"ftyp", b"moov", b"mdat", b"wide", b"free", b"qt  "])
             )
 
-            # 🌟 Ép buộc tất cả tệp video sang đuôi .mp4 để Lark API hỗ trợ phát trực tiếp 100%
+            # Ép buộc tất cả video sang đuôi .mp4
             if is_video or (not ext and os.path.getsize(file_path) > 300 * 1024):
-                if ext not in [".mp4", ".mov"]:
-                    new_p = os.path.join(dir_name, f"{name}.mp4")
-                    os.rename(file_path, new_p)
-                    return new_p
-                elif ext == ".mov":
+                if ext != ".mp4":
                     new_p = os.path.join(dir_name, f"{name}.mp4")
                     os.rename(file_path, new_p)
                     return new_p
@@ -771,7 +775,7 @@ def get_badger_token() -> str:
         headers = {
             "AppId": "1141147648",
             "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         res = global_session.post(url, headers=headers, json={"appId": "5cbed6ac-a083-4e14-b191-b4ba07653de2"}, timeout=10)
         if res.status_code == 200:
@@ -785,6 +789,11 @@ def get_badger_token() -> str:
 
 def _save_stream_to_file(res, target_dir: str, default_name: str = "proof_file") -> bool:
     try:
+        ct = res.headers.get("Content-Type", "").lower()
+        if "text/html" in ct:
+            log("⚠️ Bỏ qua lưu vì Content-Type là text/html!")
+            return False
+
         content_disposition = res.headers.get("Content-Disposition", "")
         extracted_name = ""
         if "filename=" in content_disposition:
@@ -796,7 +805,6 @@ def _save_stream_to_file(res, target_dir: str, default_name: str = "proof_file")
                     extracted_name = fn_match.group(1)
 
         raw_name = extracted_name or default_name
-        ct = res.headers.get("Content-Type", "").lower()
         if not any(raw_name.lower().endswith(x) for x in [".mp4", ".mov", ".jpg", ".jpeg", ".png", ".pdf"]):
             if "video" in ct or "mp4" in ct or "octet-stream" in ct:
                 raw_name += ".mp4"
@@ -819,7 +827,14 @@ def _save_stream_to_file(res, target_dir: str, default_name: str = "proof_file")
                 if chunk:
                     f.write(chunk)
 
-        if os.path.exists(save_path) and os.path.getsize(save_path) > 500:
+        if os.path.exists(save_path) and os.path.getsize(save_path) > 1000:
+            with open(save_path, "rb") as f_chk:
+                header = f_chk.read(64)
+            if header.startswith(b"<!DOCTYPE") or header.startswith(b"<html") or b"<Error>" in header:
+                log(f"⚠️ Tệp {clean_name} thực chất là văn bản HTML/XML, loại bỏ.")
+                os.remove(save_path)
+                return False
+
             log(f"📥 Đã tải thành công: {clean_name} ({format_size(os.path.getsize(save_path))})")
             return True
         if os.path.exists(save_path):
@@ -833,7 +848,7 @@ def download_onedrive(url: str, target_dir: str) -> bool:
     log(f"☁️ Đang xử lý liên kết OneDrive: {clean_u}")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
     }
@@ -893,6 +908,94 @@ def download_onedrive(url: str, target_dir: str) -> bool:
 
     return False
 
+# ----------------- 🌟 HÀM TẢI VÀ BÓC TÁCH VIDEO BOXME CHUẨN XÁC -----------------
+def download_boxme(url: str, target_dir: str) -> bool:
+    clean_u = url.strip()
+    log(f"📦 Đang xử lý liên kết Boxme: {clean_u}")
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Referer": clean_u
+    }
+
+    # BƯỚC 1: Thử lấy link video trực tiếp (bỏ /v/ nếu là viewer)
+    direct_candidates = []
+    if "/v/" in clean_u:
+        direct_candidates.append(clean_u.replace("/v/", "/"))
+        direct_candidates.append(clean_u.replace("/v/", "/raw/"))
+        direct_candidates.append(clean_u.replace("/v/", "/download/"))
+        direct_candidates.append(clean_u.replace("/v/", "/stream/"))
+        direct_candidates.append(clean_u.replace("/v/", "/video/"))
+
+    for cand in direct_candidates:
+        try:
+            r_cand = global_session.get(cand, headers=headers, stream=True, timeout=(15, 300), verify=False)
+            ct = r_cand.headers.get("Content-Type", "").lower()
+            if r_cand.status_code in [200, 206] and ("video" in ct or "octet-stream" in ct or int(r_cand.headers.get("Content-Length", 0)) > 500000):
+                log(f"🎯 Bắt được luồng video Boxme qua URL rút gọn: {cand}")
+                raw_n = os.path.basename(urllib.parse.urlparse(r_cand.url or cand).path) or "boxme_video.mp4"
+                if not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov"]):
+                    raw_n += ".mp4"
+                return _save_stream_to_file(r_cand, target_dir, raw_n)
+        except Exception:
+            pass
+
+    # BƯỚC 2: Tải và bóc tách mã nguồn HTML của trang xem video (/v/)
+    try:
+        r = global_session.get(clean_u, headers=headers, timeout=15, verify=False)
+        ct = r.headers.get("Content-Type", "").lower()
+
+        if r.status_code in [200, 206] and ("video" in ct or "octet-stream" in ct):
+            raw_n = os.path.basename(urllib.parse.urlparse(r.url or clean_u).path) or "boxme_video.mp4"
+            if not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov"]):
+                raw_n += ".mp4"
+            return _save_stream_to_file(r, target_dir, raw_n)
+
+        html_text = r.text
+        unescaped = html.unescape(html_text).replace(r'\/', '/').replace(r'\u002f', '/').replace(r'\u002F', '/')
+
+        found_video_url = ""
+
+        m_src = re.search(r'<source[^>]+src=["\']([^"\']+)["\']', unescaped, re.IGNORECASE) or \
+                re.search(r'<video[^>]+src=["\']([^"\']+)["\']', unescaped, re.IGNORECASE)
+        if m_src:
+            found_video_url = urllib.parse.urljoin(r.url, m_src.group(1).strip())
+
+        if not found_video_url:
+            m_js = re.search(r'(?:source|src|file|video_url|videoUrl|stream_url|url)\s*[:=]\s*["\'](https?://[^"\']+\.(?:mp4|mov)[^"\']*)["\']', unescaped, re.IGNORECASE)
+            if m_js:
+                found_video_url = m_js.group(1).strip()
+
+        if not found_video_url:
+            all_mp4 = re.findall(r'(https?://[^\s"\'<>\\]+?\.(?:mp4|mov)[^\s"\'<>\\]*)', unescaped, re.IGNORECASE)
+            for cand in all_mp4:
+                clean_cand = cand.rstrip(';,."\')]>')
+                if clean_cand != clean_u and "/v/" not in clean_cand:
+                    found_video_url = clean_cand
+                    break
+
+        if not found_video_url:
+            m_storage = re.search(r'(https?://(?:[a-zA-Z0-9\.\-]*fptcloud\.com|[a-zA-Z0-9\.\-]*s3[a-zA-Z0-9\.\-]*|[a-zA-Z0-9\.\-]*boxme[a-zA-Z0-9\.\-]*)[^\s"\'<>\\]+?\.(?:mp4|mov)[^\s"\'<>\\]*)', unescaped, re.IGNORECASE)
+            if m_storage:
+                cand_st = m_storage.group(1).strip()
+                if cand_st != clean_u and "/v/" not in cand_st:
+                    found_video_url = cand_st
+
+        if found_video_url:
+            log(f"🎯 Bóc tách thành công URL video gốc Boxme: {found_video_url}")
+            res_dl = global_session.get(found_video_url, headers=headers, stream=True, timeout=(30, 480), verify=False)
+            if res_dl.status_code in [200, 206]:
+                raw_n = os.path.basename(urllib.parse.urlparse(res_dl.url or found_video_url).path) or "boxme_video.mp4"
+                if not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov"]):
+                    raw_n += ".mp4"
+                return _save_stream_to_file(res_dl, target_dir, raw_n)
+
+    except Exception as e:
+        log(f"Lỗi phân tích video Boxme: {e}")
+
+    return False
+
 # ----------------- 🌟 DANH SÁCH CÁC TÊN MIỀN RÚT GỌN -----------------
 SHORT_DOMAINS = [
     "byvn.net", "by.com.vn", "bom.so", "bit.ly", "l1nk.dev",
@@ -925,7 +1028,7 @@ def resolve_short_url(url: str) -> str:
             return v
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
     }
@@ -1032,7 +1135,7 @@ def extract_gdrive_title(file_id: str) -> str:
 
 def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: str = "") -> bool:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*"
     }
     real_title = preferred_name or extract_gdrive_title(file_id)
@@ -1092,7 +1195,7 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
         return False
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     }
     found_files = {}
@@ -1138,6 +1241,9 @@ def download_proof(url: str, target_dir: str) -> bool:
     if "1drv.ms" in clean_u.lower() or "onedrive.live.com" in clean_u.lower():
         return download_onedrive(clean_u, target_dir)
 
+    if "boxme.asia" in clean_u.lower():
+        return download_boxme(clean_u, target_dir)
+
     if is_short_url(clean_u):
         final_url = resolve_short_url(clean_u)
     else:
@@ -1151,6 +1257,9 @@ def download_proof(url: str, target_dir: str) -> bool:
     if "1drv.ms" in final_url.lower() or "onedrive.live.com" in final_url.lower():
         return download_onedrive(final_url, target_dir)
 
+    if "boxme.asia" in final_url.lower():
+        return download_boxme(final_url, target_dir)
+
     if any(k in final_url for k in ["drive.google.com", "drive.usercontent.google.com"]):
         if "/folders/" in final_url or "embeddedfolderview" in final_url or "drive/folders/" in final_url:
             return download_gdrive_folder(final_url, target_dir)
@@ -1159,22 +1268,21 @@ def download_proof(url: str, target_dir: str) -> bool:
             if m:
                 return download_single_gdrive_file(m.group(1), target_dir)
 
-    # 🌟 4. Tải trực tiếp (Hỗ trợ BoxMe, Alibaba Cloud OSS, FPT Cloud)
+    # 4. Tải trực tiếp (Alibaba Cloud OSS, FPT Cloud Tiki WMS, CDN)
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            "Accept": "*/*",
-            "Referer": "https://boxme.asia/"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "*/*"
         }
         res = global_session.get(final_url, headers=headers, stream=True, timeout=(25, 400), verify=False)
         if res.status_code in [200, 206]:
             actual_final_url = res.url or final_url
             ct = res.headers.get("Content-Type", "").lower()
-            if "text/html" in ct and not any(k in actual_final_url.lower() for k in ["fptcloud", "aliyuncs", "rc-upload", "boxme.asia"]):
+            if "text/html" in ct and not any(k in actual_final_url.lower() for k in ["fptcloud", "aliyuncs", "rc-upload"]):
                 return False
 
             raw_n = os.path.basename(urllib.parse.urlparse(actual_final_url).path) or "proof_media"
-            if any(k in actual_final_url.lower() for k in ["fptcloud.com", "aliyuncs.com", "rc-upload", "boxme.asia"]) and not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov", ".jpg", ".png", ".pdf"]):
+            if any(k in actual_final_url.lower() for k in ["fptcloud.com", "aliyuncs.com", "rc-upload"]) and not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov", ".jpg", ".png", ".pdf"]):
                 raw_n += ".mp4"
             return _save_stream_to_file(res, target_dir, raw_n)
     except Exception as e:
@@ -1208,7 +1316,8 @@ def extract_urls_from_text(raw_text: str) -> list:
             else:
                 resolved_list.append(u)
 
-    return list(dict.fromkeys(resolved_list))
+    # Giữ nguyên danh sách thô có thể có trùng để process_single_task kiểm tra has_duplicates
+    return [u for u in resolved_list if u.startswith("http") and len(u) > 10]
 
 def extract_message_text(message: dict) -> str:
     msg_type = message.get("message_type", "")
@@ -1269,13 +1378,14 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, raw_urls:
         for raw_path in downloaded_paths:
             if os.path.exists(raw_path):
                 fixed_path = auto_detect_and_fix_extension(raw_path)
-                fixed_name = os.path.basename(fixed_path)
-                final_files.append({
-                    "name": fixed_name,
-                    "path": fixed_path,
-                    "size": os.path.getsize(fixed_path),
-                    "ext": os.path.splitext(fixed_name)[1].lower()
-                })
+                if fixed_path and os.path.exists(fixed_path):
+                    fixed_name = os.path.basename(fixed_path)
+                    final_files.append({
+                        "name": fixed_name,
+                        "path": fixed_path,
+                        "size": os.path.getsize(fixed_path),
+                        "ext": os.path.splitext(fixed_name)[1].lower()
+                    })
 
         if not final_files:
             log(f"❌ Không tải được file nào cho đơn {ticket_id}")
@@ -1357,6 +1467,23 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, raw_urls:
         # ---------------- BUNG TỆP VÀO THREAD ----------------
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, unique_urls)
 
+        # 🌟 NẾU KHÔNG GỬI ĐƯỢC FILE NÀO VÀO THREAD -> BÁO LỖI THAY VÌ BÁO COMPLETED
+        if actual_bung_success == 0:
+            log(f"❌ Bung tệp thất bại cho đơn {ticket_id}")
+            if clock_rx_id:
+                remove_reaction_from_message(message_id, clock_rx_id)
+
+            error_img = build_half_size_banner(BANNER_ERROR_KEY, "Cảnh báo truy cập")
+            reply_thread_card(message_id, {
+                "elements": error_img + [
+                    {"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id} ‼️Hãy kiểm tra quyền truy cập link!</text_tag>"},
+                    {"tag": "hr"},
+                    build_footer_element()
+                ]
+            })
+            shutil.rmtree(task_temp_dir, ignore_errors=True)
+            return
+
         # ---------------- THẺ 2: HOÀN TẤT ----------------
         elements_list = []
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Cᴏᴍᴘʟᴇᴛᴇᴅ")
@@ -1365,7 +1492,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, raw_urls:
         card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
         elements_list.append(card2_top_highlight)
 
-        title_side_md = "  **<text_tag color='turquoise'>             Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
+        title_side_md = "  **<font color='turquoise'>             Cᴏᴍᴘʟᴇᴛᴇᴅ</font>**\n<font color='turquoise'>-ˋˏ 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅ˎˊ-</font>"
         elements_list.append(build_centered_tag(title_side_md))
 
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
@@ -1376,7 +1503,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, raw_urls:
             warning_msg = "**<text_tag color='violet'>🇭🇴🇱🇾 💩.... đừ🇳🇬 🇱à🇲 🇳🇭ư 🇹🇭ế 🇨🇭ứ! 🇱🇮🇳🇰 🇬🇮ố🇳🇬 🇳🇭🇦🇺 🇲à 🇧ạ🇳 🇪🇮🇮🇮🇮🇮</text_tag>**"
             elements_list.append(build_centered_tag(warning_msg))
 
-        thankyou_md = "<font color='turquoise'>           ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+        thankyou_md = "<font color='turquoise'>        ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
         elements_list.append(build_centered_tag(thankyou_md))
 
         card2_bottom_highlight = build_centered_tag(" **<text_tag color='turquoise'>・𝖣ᝪ𝖭𝖤・</text_tag>** ")
