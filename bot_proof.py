@@ -99,7 +99,7 @@ except Exception:
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pillow_heif.register_heif_opener()
 
-# ----------------- 2. CẤU HÌNH BIẾN MÔI TRƯỜNG & BANNER ẢNH -----------------
+# ----------------- 2. CẤU HÌNH BIẾN MÔI TRƯỜNG & BANNER ẢNH (CHUẨN ĐỊNH DẠNG IMG_V3 KHÔNG CÓ .GIF) -----------------
 APP_ID = os.environ.get("APP_ID", "").strip() or os.environ.get("LARK_APP_ID", "").strip()
 APP_SECRET = os.environ.get("APP_SECRET", "").strip() or os.environ.get("LARK_APP_SECRET", "").strip()
 TARGET_DOMAIN = getattr(lark, "LARK_DOMAIN", "https://open.larksuite.com")
@@ -109,8 +109,8 @@ TEMP_DIR = os.path.join(BASE_DIR, "temp_files")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
 
 BANNER_CARD1_KEY = "img_v3_0215r_61dad065-35d7-45ba-a33d-6ab073a717ah"      # Thẻ 1: Loading
-BANNER_ERROR_KEY = "img_v3_0215t_fa7798b2-b3e2-430f-a378-bdbbe603afxx.gif"  # Thẻ Báo Lỗi (Ảnh GIF mới)
-BANNER_COMPLETED_KEY = "img_v3_0215t_bc7fa34f-061c-4872-b310-f1811eb554xx.gif" # Thẻ 2: Hoàn Tất
+BANNER_ERROR_KEY = "img_v3_0215t_fa7798b2-b3e2-430f-a378-bdbbe603afxx"      # Thẻ Báo Lỗi (Đã bỏ đuôi .gif)
+BANNER_COMPLETED_KEY = "img_v3_0215t_bc7fa34f-061c-4872-b310-f1811eb554xx"  # Thẻ 2: Hoàn Tất (Đã bỏ đuôi .gif)
 
 PROCESSED_MESSAGES = set()
 
@@ -1351,8 +1351,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
-        
-        # 🌟 KHÔI PHỤC THANH CALLOUT BOX TRẢI DÀI TRÀN VIỀN CHO THẺ 1
         card1_top_highlight = build_highlight_box("<font color='white'><b>°•*⁀➷ 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; ➹*•°</b></font>", bg_style="carmine")
         card1_bottom_highlight = build_centered_tag("**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ...</text_tag>**")
 
@@ -1377,8 +1375,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         thankyou_md = "<font color='turquoise'>   ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
-        
-        # 🌟 KHÔI PHỤC THANH CALLOUT BOX TRẢI DÀI TRÀN VIỀN CHO THẺ 2
         card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
         card2_bottom_highlight = build_centered_tag("**<text_tag color='turquoise'>・❥Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**")
 
