@@ -99,7 +99,7 @@ except Exception:
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pillow_heif.register_heif_opener()
 
-# ----------------- 2. CẤU HÌNH BIẾN MÔI TRƯỜNG & BANNER ẢNH (CHUẨN ĐỊNH DẠNG IMG_V3 KHÔNG CÓ .GIF) -----------------
+# ----------------- 2. CẤU HÌNH BIẾN MÔI TRƯỜNG & BANNER ẢNH -----------------
 APP_ID = os.environ.get("APP_ID", "").strip() or os.environ.get("LARK_APP_ID", "").strip()
 APP_SECRET = os.environ.get("APP_SECRET", "").strip() or os.environ.get("LARK_APP_SECRET", "").strip()
 TARGET_DOMAIN = getattr(lark, "LARK_DOMAIN", "https://open.larksuite.com")
@@ -109,8 +109,8 @@ TEMP_DIR = os.path.join(BASE_DIR, "temp_files")
 HISTORY_FILE = os.path.join(BASE_DIR, "history_proof.json")
 
 BANNER_CARD1_KEY = "img_v3_0215r_61dad065-35d7-45ba-a33d-6ab073a717ah"      # Thẻ 1: Loading
-BANNER_ERROR_KEY = "img_v3_0215t_fa7798b2-b3e2-430f-a378-bdbbe603afxx"      # Thẻ Báo Lỗi (Đã bỏ đuôi .gif)
-BANNER_COMPLETED_KEY = "img_v3_0215t_bc7fa34f-061c-4872-b310-f1811eb554xx"  # Thẻ 2: Hoàn Tất (Đã bỏ đuôi .gif)
+BANNER_ERROR_KEY = "img_v3_0215t_fa7798b2-b3e2-430f-a378-bdbbe603afxx"      # Thẻ Báo Lỗi
+BANNER_COMPLETED_KEY = "img_v3_0215t_bc7fa34f-061c-4872-b310-f1811eb554xx"  # Thẻ 2: Hoàn Tất
 
 PROCESSED_MESSAGES = set()
 
@@ -238,7 +238,7 @@ def build_footer_element(repeat_tag_str: str = "") -> dict:
             "elements": [
                 {
                     "tag": "markdown",
-                    "content": "🌧️ **<text_tag color='wathet'>ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...</text_tag>** 🌧️"
+                    "content": "🌧️**<font color='indigo'>ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ʜồɪ ᴄʜɪềᴜ, ᴛʀờɪ ᴍưᴀ...</font>** 🌧️"
                 }
             ]
         },
@@ -959,6 +959,8 @@ KNOWN_URL_MAPPINGS = {
     "by.com.vn/wyts": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1789710295067-25",
     "byvn.net/tep2": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1789710295067-61",
     "by.com.vn/tep2": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1789710295067-61",
+    "byvn.net/4jnn": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1790237562424-5",
+    "by.com.vn/4jnn": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1790237562424-5",
 }
 
 # ----------------- 🌟 GIẢI MÃ ĐA TẦNG CHO BYVN.NET, BOM.SO, BIT.LY -----------------
@@ -1160,6 +1162,9 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 def download_proof(url: str, target_dir: str) -> bool:
     clean_u = url.strip()
 
+    # Xử lý cắt bỏ các phần dính chùm như " và ", "%20và%20", khoảng trắng thừa
+    clean_u = re.split(r'(?i)\s+(?:và|and|%20và%20|%20and%20)\s+', clean_u)[0].strip()
+
     # 1. MEGA.NZ
     if "mega.nz" in clean_u.lower():
         return download_mega(clean_u, target_dir)
@@ -1218,9 +1223,23 @@ def extract_urls_from_text(raw_text: str) -> list:
     text = html.unescape(raw_text)
     text = text.replace(r"\/", "/").replace(r"\u002f", "/").replace(r"\u002F", "/")
     
+    # Tách chuỗi nếu có các từ nối dính chùm như " và ", "%20và%20"
+    text = re.sub(r'(?i)\s+(?:và|and|%20và%20|%20and%20)\s+', '\n', text)
+    
     found = re.findall(r'https?://[^\s"\'<>]+', text)
-    cleaned = [u.rstrip(';>,.()[]\'"') for u in found if u.startswith("http") and len(u) > 10]
-    return list(dict.fromkeys(cleaned))
+    cleaned = []
+    for u in found:
+        u_clean = u.rstrip(';>,.()[]\'"')
+        # Nếu link bị dính dấu -5 hoặc dính query parameters phía sau, tách sạch sẽ
+        if "aliyuncs.com" in u_clean:
+            # Tách lấy đúng link gốc kết thúc bằng số thứ tự (ví dụ -25, -61, -5)
+            m_oss = re.search(r'(https?://[^\s]+?oss-[^\s]+?rc-upload-\d+-\d+)', u_clean)
+            if m_oss:
+                cleaned.append(m_oss.group(1))
+                continue
+        cleaned.append(u_clean)
+
+    return list(dict.fromkeys([u for u in cleaned if u.startswith("http") and len(u) > 10]))
 
 def extract_message_text(message: dict) -> str:
     msg_type = message.get("message_type", "")
@@ -1296,7 +1315,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             if "sharepoint.com" in first_url:
                 reply_thread_card(message_id, {
                     "elements": error_img + [
-                        {"tag": "markdown", "content": f"📁 **𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}**\n\n<font color='orange'>🚨 Link là **Thư mục SharePoint nội bộ**, 🤖 không thể tải tự động do cơ chế bảo mật của Microsoft.</font>\n\n👉 [**Mở Thư mục SharePoint**]({first_url})"},
+                        {"tag": "markdown", "content": f"📁 **𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}**\n\n<font color='orange'>⚠️ Link là **Thư mục SharePoint nội bộ**, bot không thể tải tự động do cơ chế bảo mật của Microsoft.</font>\n\n👉 [**Mở Thư mục SharePoint**]({first_url})"},
                         {"tag": "hr"},
                         build_footer_element()
                     ]
@@ -1304,7 +1323,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             else:
                 reply_thread_card(message_id, {
                     "elements": error_img + [
-                        {"tag": "markdown", "content": f"<text_tag color='carmine'>⚠️ Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"},
+                        {"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"},
                         {"tag": "hr"},
                         build_footer_element()
                     ]
@@ -1345,14 +1364,14 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         header_block = (
             f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-            f"   ╰┄▸💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n\n"
+            f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n\n"
             f"{summary_group_str}\n\n"
             f"{files_str}"
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
         card1_top_highlight = build_highlight_box("<font color='white'><b>°•*⁀➷ 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; ➹*•°</b></font>", bg_style="carmine")
-        card1_bottom_highlight = build_centered_tag("**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ..........</text_tag>**")
+        card1_bottom_highlight = build_centered_tag("**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ...</text_tag>**")
 
         loading_card_payload = {
             "elements": card1_img_element + [
@@ -1371,8 +1390,8 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         # ---------------- THẺ 2: HOÀN TẤT ----------------
         title_side_md = "**<text_tag color='turquoise'>       Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
-        heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸🎫 **<text_tag color='carmine'>{ticket_id}</text_tag>**"
-        thankyou_md = "<font color='turquoise'>             ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+        heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
+        thankyou_md = "<font color='turquoise'>           ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
         card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Cᴏᴍᴘʟᴇᴛᴇᴅ")
         card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
