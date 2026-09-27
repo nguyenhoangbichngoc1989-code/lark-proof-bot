@@ -238,7 +238,7 @@ def build_footer_element(repeat_tag_str: str = "") -> dict:
             "elements": [
                 {
                     "tag": "markdown",
-                    "content": "🌧️ <text_tag color='wathet'>**ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...**</text_tag> 🌧️"
+                    "content": "🌧️ **<text_tag color='wathet'>ʜồɪ ᴄʜɪềᴜ, ʜồɪ ᴄʜɪềᴜ...ᴛʀờɪ ᴍưᴀ...</text_tag>** 🌧️"
                 }
             ]
         },
@@ -1296,7 +1296,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             if "sharepoint.com" in first_url:
                 reply_thread_card(message_id, {
                     "elements": error_img + [
-                        {"tag": "markdown", "content": f"📁 **𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}**\n\n<font color='orange'>⚠️ Link là **Thư mục SharePoint nội bộ**, bot không thể tải tự động do cơ chế bảo mật của Microsoft.</font>\n\n👉 [**Mở Thư mục SharePoint**]({first_url})"},
+                        {"tag": "markdown", "content": f"📁 **𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}**\n\n<font color='orange'>🚨 Link là **Thư mục SharePoint nội bộ**, 🤖 không thể tải tự động do cơ chế bảo mật của Microsoft.</font>\n\n👉 [**Mở Thư mục SharePoint**]({first_url})"},
                         {"tag": "hr"},
                         build_footer_element()
                     ]
@@ -1304,7 +1304,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
             else:
                 reply_thread_card(message_id, {
                     "elements": error_img + [
-                        {"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"},
+                        {"tag": "markdown", "content": f"<text_tag color='carmine'>⚠️ Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"},
                         {"tag": "hr"},
                         build_footer_element()
                     ]
@@ -1345,14 +1345,14 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
 
         header_block = (
             f"🎫<text_tag color='turquoise'>{ticket_id}</text_tag>\n"
-            f"   ╰┄▸ 💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n\n"
+            f"   ╰┄▸💾<text_tag color='carmine'>{format_size(total_size)}</text_tag>\n\n"
             f"{summary_group_str}\n\n"
             f"{files_str}"
         )
 
         card1_img_element = build_half_size_banner(BANNER_CARD1_KEY, "⌛Lᴏᴀᴅɪɴɢ...")
         card1_top_highlight = build_highlight_box("<font color='white'><b>°•*⁀➷ 𝐃𝐎𝐍'𝐓 𝐆𝐎 𝐀𝐍𝐘𝐖𝐇𝐄𝐑𝐄, 𝐁𝐄𝐂𝐀𝐔𝐒𝐄 𝐖𝐄 𝐖𝐎𝐍'𝐓 &gt;&lt; ➹*•°</b></font>", bg_style="carmine")
-        card1_bottom_highlight = build_centered_tag("**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ...</text_tag>**")
+        card1_bottom_highlight = build_centered_tag("**<text_tag color='red'>⌛Lᴏᴀᴅɪɴɢ..........</text_tag>**")
 
         loading_card_payload = {
             "elements": card1_img_element + [
@@ -1369,14 +1369,14 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
 
         # ---------------- THẺ 2: HOÀN TẤT ----------------
-        title_side_md = "**<text_tag color='turquoise'>・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
+        title_side_md = "**<text_tag color='turquoise'>       Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
-        heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸ 🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
-        thankyou_md = "<font color='turquoise'>   ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+        heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      ╰┄▸🎫 **<text_tag color='carmine'>{ticket_id}</text_tag>**"
+        thankyou_md = "<font color='turquoise'>             ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
 
-        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "・❥・Cᴏᴍᴘʟᴇᴛᴇᴅ")
+        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Cᴏᴍᴘʟᴇᴛᴇᴅ")
         card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
-        card2_bottom_highlight = build_centered_tag("**<text_tag color='turquoise'>・❥Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**")
+        card2_bottom_highlight = build_centered_tag("**<text_tag color='turquoise'>・𝖣ᝪ𝖭𝖤・</text_tag>**")
 
         finish_card_payload = {
             "elements": card2_img_element + [
