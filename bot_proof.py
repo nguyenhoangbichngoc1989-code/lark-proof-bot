@@ -353,15 +353,15 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         base_name = os.path.splitext(original_name or os.path.basename(file_path))[0]
         base_name = re.sub(r'^(?:conv_[a-f0-9]{6}_|opt_[a-f0-9]{6}_|tmp_[a-zA-Z0-9]+_)', '', base_name)
         clean_base = sanitize_filename(base_name)
-        if clean_base.lower().endswith(".mov"):
+        if clean_base.lower().endswith(".mp4"):
             clean_base = clean_base[:-4]
-        elif clean_base.lower().endswith(".mp4"):
+        elif clean_base.lower().endswith(".mov"):
             clean_base = clean_base[:-4]
 
-        temp_out = os.path.join(dir_name, f"tmp_{uuid.uuid4().hex[:6]}_{clean_base}.mov")
-        final_mov = os.path.join(dir_name, f"{clean_base}.mov")
+        temp_out = os.path.join(dir_name, f"tmp_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
+        final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
-        log(f"⚙️ Bắt đầu nén nhẹ tải cho video MOV: {clean_base} ({size_mb:.2f} MB)...")
+        log(f"⚙️ Bắt đầu nén nhẹ tải cho video MP4: {clean_base} ({size_mb:.2f} MB)...")
 
         vf = "scale=640:360:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
         cmd = [
@@ -373,7 +373,6 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
             "-b:v", "350k", "-maxrate", "450k", "-bufsize", "700k",
             "-pix_fmt", "yuv420p",
             "-an",
-            "-f", "mov",
             "-movflags", "+faststart",
             temp_out
         ]
@@ -383,16 +382,16 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
 
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 10000:
             out_mb = os.path.getsize(temp_out) / (1024 * 1024)
-            log(f"✨ Nén video hoàn tất: {clean_base}.mov ({out_mb:.2f} MB)")
+            log(f"✨ Nén video hoàn tất: {clean_base}.mp4 ({out_mb:.2f} MB)")
             try:
-                if os.path.exists(final_mov) and final_mov != temp_out:
-                    os.remove(final_mov)
-                if os.path.exists(file_path) and file_path != temp_out and file_path != final_mov:
+                if os.path.exists(final_mp4) and final_mp4 != temp_out:
+                    os.remove(final_mp4)
+                if os.path.exists(file_path) and file_path != temp_out and file_path != final_mp4:
                     os.remove(file_path)
             except Exception:
                 pass
-            os.rename(temp_out, final_mov)
-            return final_mov
+            os.rename(temp_out, final_mp4)
+            return final_mp4
         else:
             if os.path.exists(temp_out):
                 os.remove(temp_out)
@@ -401,7 +400,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
 
     return file_path
 
-# ----------------- TỰ ĐỘNG NHẬN DIỆN VÀ ÉP ĐUÔI .MOV HOẶC .MP4 -----------------
+# ----------------- TỰ ĐỘNG NHẬN DIỆN VÀ ÉP ĐUÔI .MP4 CHUẨN XÁC CHO LARK STREAM -----------------
 def auto_detect_and_fix_extension(file_path: str) -> str:
     try:
         dir_name = os.path.dirname(file_path)
@@ -435,13 +434,14 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
                 any(box in header[:128] for box in [b"ftyp", b"moov", b"mdat", b"wide", b"free", b"qt  "])
             )
 
+            # 🌟 Ép buộc tất cả tệp video sang đuôi .mp4 để Lark API hỗ trợ phát trực tiếp 100%
             if is_video or (not ext and os.path.getsize(file_path) > 300 * 1024):
-                if ext not in [".mov", ".mp4"]:
-                    new_p = os.path.join(dir_name, f"{name}.mov")
+                if ext not in [".mp4", ".mov"]:
+                    new_p = os.path.join(dir_name, f"{name}.mp4")
                     os.rename(file_path, new_p)
                     return new_p
-                elif ext == ".mp4":
-                    new_p = os.path.join(dir_name, f"{name}.mov")
+                elif ext == ".mov":
+                    new_p = os.path.join(dir_name, f"{name}.mp4")
                     os.rename(file_path, new_p)
                     return new_p
                 return file_path
@@ -548,8 +548,8 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                         actual_sent_count += 1
                         log(f"📄 Đã bung tệp PDF vào thread: {file_name}")
 
-            # 3. Tệp Video (.mov / .mp4)
-            elif file_ext in [".mov", ".mp4", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
+            # 3. Tệp Video (.mp4 chuẩn cho Lark API)
+            elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = f["path"]
                 if os.path.getsize(send_path) / (1024 * 1024) > 32.0:
                     send_path = compress_video_to_safe_mp4(file_path, original_name=file_name)
@@ -567,7 +567,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                     resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     if resp and resp.success():
                         actual_sent_count += 1
-                        log(f"📥 Đã bung video phát trực tiếp (.mov): {os.path.basename(send_path)}")
+                        log(f"📥 Đã bung video phát trực tiếp (.mp4): {os.path.basename(send_path)}")
 
             # 4. Tệp khác
             else:
@@ -666,7 +666,7 @@ def download_mega(url: str, target_dir: str) -> bool:
                         real_key = struct.pack(">4I", k_ints[0] ^ k_ints[4], k_ints[1] ^ k_ints[5], k_ints[2] ^ k_ints[6], k_ints[3] ^ k_ints[7])
                         iv = struct.pack(">4I", k_ints[4], k_ints[5], 0, 0)
 
-                        file_name = f"mega_{node['h']}.mov"
+                        file_name = f"mega_{node['h']}.mp4"
                         if node.get("a"):
                             try:
                                 enc_a = b64_url_decode(node["a"])
@@ -684,8 +684,8 @@ def download_mega(url: str, target_dir: str) -> bool:
                                 log(f"Lỗi giải mã tên tệp MEGA: {e}")
 
                         file_name = sanitize_filename(file_name)
-                        if not any(file_name.lower().endswith(x) for x in [".mov", ".mp4", ".jpg", ".png", ".pdf"]):
-                            file_name += ".mov"
+                        if not any(file_name.lower().endswith(x) for x in [".mp4", ".mov", ".jpg", ".png", ".pdf"]):
+                            file_name += ".mp4"
 
                         dl_req = [{"a": "g", "g": 1, "n": node["h"]}]
                         dl_res = global_session.post(f"https://g.api.mega.co.nz/cs?id=1&n={folder_id}", json=dl_req, timeout=25)
@@ -725,7 +725,7 @@ def download_mega(url: str, target_dir: str) -> bool:
                 dl_data = dl_res.json()
                 if isinstance(dl_data, list) and len(dl_data) > 0 and isinstance(dl_data[0], dict) and "g" in dl_data[0]:
                     dl_url = dl_data[0]["g"]
-                    file_name = f"mega_{file_id}.mov"
+                    file_name = f"mega_{file_id}.mp4"
                     if dl_data[0].get("at"):
                         try:
                             enc_a = b64_url_decode(dl_data[0]["at"])
@@ -743,8 +743,8 @@ def download_mega(url: str, target_dir: str) -> bool:
                             pass
 
                     file_name = sanitize_filename(file_name)
-                    if not any(file_name.lower().endswith(x) for x in [".mov", ".mp4", ".jpg", ".png", ".pdf"]):
-                        file_name += ".mov"
+                    if not any(file_name.lower().endswith(x) for x in [".mp4", ".mov", ".jpg", ".png", ".pdf"]):
+                        file_name += ".mp4"
 
                     log(f"📥 Đang tải và giải mã video đơn lẻ MEGA: {file_name}...")
                     stream_res = global_session.get(dl_url, stream=True, timeout=(30, 480))
@@ -797,9 +797,9 @@ def _save_stream_to_file(res, target_dir: str, default_name: str = "proof_file")
 
         raw_name = extracted_name or default_name
         ct = res.headers.get("Content-Type", "").lower()
-        if not any(raw_name.lower().endswith(x) for x in [".mov", ".mp4", ".jpg", ".jpeg", ".png", ".pdf"]):
+        if not any(raw_name.lower().endswith(x) for x in [".mp4", ".mov", ".jpg", ".jpeg", ".png", ".pdf"]):
             if "video" in ct or "mp4" in ct or "octet-stream" in ct:
-                raw_name += ".mov"
+                raw_name += ".mp4"
             elif "pdf" in ct:
                 raw_name += ".pdf"
             elif "image" in ct:
@@ -874,7 +874,7 @@ def download_onedrive(url: str, target_dir: str) -> bool:
                     if res_api.status_code == 200:
                         data = res_api.json()
                         dl_url = data.get("@content.downloadUrl") or data.get("@microsoft.graph.downloadUrl") or data.get("downloadUrl")
-                        fname = data.get("name") or "onedrive_video.mov"
+                        fname = data.get("name") or "onedrive_video.mp4"
                         if dl_url:
                             log(f"🎯 Bắt thành công luồng tải qua Badger API: {fname}")
                             res_dl = global_session.get(dl_url, headers=badger_headers, stream=True, timeout=(30, 480))
@@ -887,7 +887,7 @@ def download_onedrive(url: str, target_dir: str) -> bool:
         sep = "&" if "?" in clean_u else "?"
         res_d1 = global_session.get(f"{clean_u}{sep}download=1", headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
         if res_d1.status_code in [200, 206] and "text/html" not in res_d1.headers.get("Content-Type", "").lower():
-            return _save_stream_to_file(res_d1, target_dir, "onedrive_video.mov")
+            return _save_stream_to_file(res_d1, target_dir, "onedrive_video.mp4")
     except Exception:
         pass
 
@@ -1046,7 +1046,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
         try:
             res = global_session.get(direct_url, headers=headers, stream=True, verify=False, timeout=(30, 480))
             if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", "").lower():
-                return _save_stream_to_file(res, target_dir, real_title or f"gdrive_{file_id}.mov")
+                return _save_stream_to_file(res, target_dir, real_title or f"gdrive_{file_id}.mp4")
         except Exception:
             pass
 
@@ -1054,7 +1054,7 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
         init_url = f"https://drive.google.com/uc?export=download&id={file_id}"
         res = global_session.get(init_url, headers=headers, stream=True, verify=False, timeout=50)
         if res.status_code == 200 and "text/html" not in res.headers.get("Content-Type", "").lower():
-            return _save_stream_to_file(res, target_dir, real_title or f"gdrive_{file_id}.mov")
+            return _save_stream_to_file(res, target_dir, real_title or f"gdrive_{file_id}.mp4")
 
         html_text = res.text
         link_match = re.search(r'<a\s+[^>]*?id=["\']uc-download-link["\'][^>]*?href=["\']([^"\']+)["\']', html_text, re.IGNORECASE) or \
@@ -1066,13 +1066,13 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
                 confirmed_url = "https://drive.usercontent.google.com" + confirmed_url
             res_down = global_session.get(html.unescape(confirmed_url), headers={"Referer": res.url}, stream=True, verify=False, timeout=(30, 480))
             if res_down.status_code == 200 and "text/html" not in res_down.headers.get("Content-Type", "").lower():
-                return _save_stream_to_file(res_down, target_dir, real_title or f"gdrive_{file_id}.mov")
+                return _save_stream_to_file(res_down, target_dir, real_title or f"gdrive_{file_id}.mp4")
     except Exception:
         pass
 
     try:
         import gdown
-        fallback_path = os.path.join(target_dir, sanitize_filename(real_title or f"gdrive_{file_id}.mov"))
+        fallback_path = os.path.join(target_dir, sanitize_filename(real_title or f"gdrive_{file_id}.mp4"))
         output = gdown.download(id=file_id, output=fallback_path, quiet=False, fuzzy=True)
         if output and os.path.exists(output) and os.path.getsize(output) > 500:
             return True
@@ -1159,7 +1159,7 @@ def download_proof(url: str, target_dir: str) -> bool:
             if m:
                 return download_single_gdrive_file(m.group(1), target_dir)
 
-    # 🌟 4. Tải trực tiếp (Bổ sung boxme.asia, aliyuncs, fptcloud)
+    # 🌟 4. Tải trực tiếp (Hỗ trợ BoxMe, Alibaba Cloud OSS, FPT Cloud)
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -1174,8 +1174,8 @@ def download_proof(url: str, target_dir: str) -> bool:
                 return False
 
             raw_n = os.path.basename(urllib.parse.urlparse(actual_final_url).path) or "proof_media"
-            if any(k in actual_final_url.lower() for k in ["fptcloud.com", "aliyuncs.com", "rc-upload", "boxme.asia"]) and not any(raw_n.lower().endswith(x) for x in [".mov", ".mp4", ".jpg", ".png", ".pdf"]):
-                raw_n += ".mov"
+            if any(k in actual_final_url.lower() for k in ["fptcloud.com", "aliyuncs.com", "rc-upload", "boxme.asia"]) and not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov", ".jpg", ".png", ".pdf"]):
+                raw_n += ".mp4"
             return _save_stream_to_file(res, target_dir, raw_n)
     except Exception as e:
         log(f"Lỗi tải trực tiếp: {e}")
@@ -1307,7 +1307,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, raw_urls:
         total_size = sum(x["size"] for x in final_files)
         file_count = len(final_files)
 
-        video_exts = {".mov", ".mp4", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"}
+        video_exts = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"}
         image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".jfif", ".svg", ".tiff"}
         audio_exts = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma", ".opus"}
 
@@ -1441,7 +1441,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         text = extract_message_text(msg_dict)
 
         if "http://" in text or "https://" in text:
-            log(f"📩 [LARK] BẮT ĐƯỢC TIN NHẮN CHỨA LINK: {text[:60]}...pur")
+            log(f"📩 [LARK] BẮT ĐƯỢC TIN NHẮN CHỨA LINK: {text[:60]}...")
             t = threading.Thread(target=parse_and_dispatch, args=(msg.message_id, chat_id, text, sender_id))
             t.daemon = True
             t.start()
