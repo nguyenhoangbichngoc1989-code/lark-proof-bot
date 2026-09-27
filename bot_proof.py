@@ -961,6 +961,8 @@ KNOWN_URL_MAPPINGS = {
     "by.com.vn/tep2": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1789710295067-61",
     "byvn.net/4jnn": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1790237562424-5",
     "by.com.vn/4jnn": "https://aidc-xspace-xform.oss-ap-southeast-1.aliyuncs.com/common/rc-upload-1790237562424-5",
+    "byvn.net/pkgd": "https://drive.google.com/drive/folders/1nwBlWXMCsL3ST5f9jrkGDDC-YQnbM8kU",
+    "by.com.vn/pkgd": "https://drive.google.com/drive/folders/1nwBlWXMCsL3ST5f9jrkGDDC-YQnbM8kU",
 }
 
 # ----------------- 🌟 GIẢI MÃ ĐA TẦNG CHO BYVN.NET, BOM.SO, BIT.LY -----------------
@@ -1134,23 +1136,36 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
     if not folder_id:
         return False
 
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
     found_files = {}
 
     try:
-        embed_url = f"https://drive.google.com/embeddedfolderview?id={folder_id}#list"
-        r_embed = global_session.get(embed_url, headers=headers, timeout=20, verify=False)
-        if r_embed.status_code == 200:
-            for m in re.finditer(r'/file/d/([a-zA-Z0-9_-]{25,50})[^\'"]*[\'"][^>]*>([^<]+)<', r_embed.text):
-                fid = m.group(1)
-                if fid != folder_id and len(fid) >= 25:
-                    found_files[fid] = html.unescape(m.group(2)).strip()
+        # Sử dụng phương pháp quét nhúng đồng thời để vượt qua tường lửa Google
+        embed_urls = [
+            f"https://drive.google.com/embeddedfolderview?id={folder_id}#list",
+            f"https://drive.google.com/drive/folders/{folder_id}"
+        ]
+        
+        for embed_url in embed_urls:
+            r_embed = global_session.get(embed_url, headers=headers, timeout=20, verify=False)
+            if r_embed.status_code == 200:
+                html_content = r_embed.text
+                for m in re.finditer(r'/file/d/([a-zA-Z0-9_-]{25,50})[^\'"]*[\'"][^>]*>([^<]+)<', html_content):
+                    fid = m.group(1)
+                    if fid != folder_id and len(fid) >= 25:
+                        found_files[fid] = html.unescape(m.group(2)).strip()
 
-            for fid in re.findall(r'/file/d/([a-zA-Z0-9_-]{25,50})', r_embed.text):
-                if fid != folder_id and fid not in found_files:
-                    found_files[fid] = f"gdrive_file_{fid}"
-    except Exception:
-        pass
+                for fid in re.findall(r'/file/d/([a-zA-Z0-9_-]{25,50})', html_content):
+                    if fid != folder_id and fid not in found_files:
+                        found_files[fid] = f"gdrive_file_{fid}"
+                        
+                if found_files:
+                    break
+    except Exception as e:
+        log(f"Lỗi quét thư mục Google Drive: {e}")
 
     if found_files:
         success_count = sum(1 for fid, fname in found_files.items() if download_single_gdrive_file(fid, target_dir, fname))
@@ -1161,19 +1176,14 @@ def download_gdrive_folder(folder_url: str, target_dir: str) -> bool:
 # ----------------- ĐIỀU PHỐI TẢI XUỐNG CHO MỌI ĐỊNH DẠNG LINK -----------------
 def download_proof(url: str, target_dir: str) -> bool:
     clean_u = url.strip()
-
-    # Xử lý cắt bỏ các phần dính chùm như " và ", "%20và%20", khoảng trắng thừa
     clean_u = re.split(r'(?i)\s+(?:và|and|%20và%20|%20and%20)\s+', clean_u)[0].strip()
 
-    # 1. MEGA.NZ
     if "mega.nz" in clean_u.lower():
         return download_mega(clean_u, target_dir)
 
-    # 2. OneDrive (1drv.ms / onedrive.live.com)
     if "1drv.ms" in clean_u.lower() or "onedrive.live.com" in clean_u.lower():
         return download_onedrive(clean_u, target_dir)
 
-    # 🌟 Giải mã toàn diện mọi liên kết rút gọn
     if is_short_url(clean_u):
         final_url = resolve_short_url(clean_u)
     else:
@@ -1187,16 +1197,14 @@ def download_proof(url: str, target_dir: str) -> bool:
     if "1drv.ms" in final_url.lower() or "onedrive.live.com" in final_url.lower():
         return download_onedrive(final_url, target_dir)
 
-    # 3. Google Drive
     if any(k in final_url for k in ["drive.google.com", "drive.usercontent.google.com"]):
-        if "/folders/" in final_url or "embeddedfolderview" in final_url:
+        if "/folders/" in final_url or "embeddedfolderview" in final_url or "drive/folders/" in final_url:
             return download_gdrive_folder(final_url, target_dir)
         else:
             m = re.search(r'(?:/file/d/|/d/|id=|download\?id=)([a-zA-Z0-9_-]{25,50})', final_url)
             if m:
                 return download_single_gdrive_file(m.group(1), target_dir)
 
-    # 4. Tải trực tiếp (Alibaba Cloud OSS, FPT Cloud Tiki WMS, CDN)
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -1222,24 +1230,29 @@ def download_proof(url: str, target_dir: str) -> bool:
 def extract_urls_from_text(raw_text: str) -> list:
     text = html.unescape(raw_text)
     text = text.replace(r"\/", "/").replace(r"\u002f", "/").replace(r"\u002F", "/")
-    
-    # Tách chuỗi nếu có các từ nối dính chùm như " và ", "%20và%20"
     text = re.sub(r'(?i)\s+(?:và|and|%20và%20|%20and%20)\s+', '\n', text)
     
     found = re.findall(r'https?://[^\s"\'<>]+', text)
     cleaned = []
     for u in found:
         u_clean = u.rstrip(';>,.()[]\'"')
-        # Nếu link bị dính dấu -5 hoặc dính query parameters phía sau, tách sạch sẽ
         if "aliyuncs.com" in u_clean:
-            # Tách lấy đúng link gốc kết thúc bằng số thứ tự (ví dụ -25, -61, -5)
             m_oss = re.search(r'(https?://[^\s]+?oss-[^\s]+?rc-upload-\d+-\d+)', u_clean)
             if m_oss:
                 cleaned.append(m_oss.group(1))
                 continue
         cleaned.append(u_clean)
 
-    return list(dict.fromkeys([u for u in cleaned if u.startswith("http") and len(u) > 10]))
+    resolved_list = []
+    for u in cleaned:
+        if u.startswith("http") and len(u) > 10:
+            if is_short_url(u):
+                final_u = resolve_short_url(u)
+                resolved_list.append(final_u)
+            else:
+                resolved_list.append(u)
+
+    return list(dict.fromkeys(resolved_list))
 
 def extract_message_text(message: dict) -> str:
     msg_type = message.get("message_type", "")
@@ -1272,8 +1285,12 @@ def extract_message_text(message: dict) -> str:
     return ""
 
 # ----------------- 7. XỬ LÝ CHÍNH & PHẢN HỒI THẺ CHO TỪNG TICKET -----------------
-def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: list, sender_id: str):
-    log(f"📥 BẮT ĐẦU XỬ LÝ ĐƠN: {ticket_id} (Tổng link: {len(urls)})")
+def process_single_task(message_id: str, chat_id: str, ticket_id: str, raw_urls: list, sender_id: str):
+    log(f"📥 BẮT ĐẦU XỬ LÝ ĐƠN: {ticket_id} (Tổng link thô: {len(raw_urls)})")
+    
+    unique_urls = list(dict.fromkeys(raw_urls))
+    has_duplicates = len(unique_urls) < len(raw_urls)
+    
     clock_rx_id = add_reaction_to_message(message_id, "AlarmClock")
 
     try:
@@ -1282,7 +1299,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         shutil.rmtree(task_temp_dir, ignore_errors=True)
         os.makedirs(task_temp_dir, exist_ok=True)
 
-        for u in urls:
+        for u in unique_urls:
             download_proof(u, task_temp_dir)
 
         downloaded_paths = []
@@ -1304,13 +1321,12 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
                     "ext": os.path.splitext(fixed_name)[1].lower()
                 })
 
-        # THẺ BÁO LỖI NẾU KHÔNG CÓ TỆP NÀO ĐƯỢC TẢI
         if not final_files:
             log(f"❌ Không tải được file nào cho đơn {ticket_id}")
             if clock_rx_id:
                 remove_reaction_from_message(message_id, clock_rx_id)
 
-            first_url = urls[0] if urls else ""
+            first_url = unique_urls[0] if unique_urls else ""
             error_img = build_half_size_banner(BANNER_ERROR_KEY, "Cảnh báo truy cập")
             if "sharepoint.com" in first_url:
                 reply_thread_card(message_id, {
@@ -1335,7 +1351,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         total_size = sum(x["size"] for x in final_files)
         file_count = len(final_files)
 
-        # PHÂN LOẠI FILE BẬC THANG
         video_exts = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"}
         image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".jfif", ".svg", ".tiff"}
         audio_exts = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma", ".opus"}
@@ -1358,7 +1373,6 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         summary_group_str = "\n".join(group_lines)
         repeat_tag = f"**<text_tag color='carmine'>📋 Lần {req_count}</text_tag>**" if req_count > 1 else "**<text_tag color='carmine'>📋 Lần 1</text_tag>**"
 
-        # ---------------- THẺ 1: XUẤT HIỆN TỨC THÌ (ĐÃ BỎ DÒNG ĐẾM TỆP 1/1) ----------------
         file_lines = [f"         <font color='carmine'>╰┄‌•</font>{item['name']}: <text_tag color='carmine'>[{format_size(item['size'])}]</text_tag>" for item in final_files]
         files_str = "\n".join(file_lines)
 
@@ -1385,29 +1399,37 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, urls: lis
         reply_thread_card(message_id, loading_card_payload)
 
         # ---------------- BUNG TỆP VÀO THREAD ----------------
-        actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, urls)
+        actual_bung_success = upload_and_send_batch_proofs(message_id, final_files, unique_urls)
 
         # ---------------- THẺ 2: HOÀN TẤT ----------------
+        elements_list = []
+        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Cᴏᴍᴘʟᴇᴛᴇᴅ")
+        elements_list.extend(card2_img_element)
+
+        card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
+        elements_list.append(card2_top_highlight)
+
         title_side_md = "  **<text_tag color='turquoise'>             Cᴏᴍᴘʟᴇᴛᴇᴅ</text_tag>**\n<text_tag color='turquoise'>-ˋˏ    𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎OF ˎˊ-</text_tag>"
+        elements_list.append(build_centered_tag(title_side_md))
+
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
         heading_md = f"<font color='carmine'>**♡ {sender_mention} ơi...</font>**\n      <font color='carmine'>╰┄‌•</font>🎫 *<text_tag color='carmine'>{ticket_id}</text_tag>*"
+        elements_list.append({"tag": "markdown", "content": heading_md})
+
+        if has_duplicates:
+            warning_msg = "**<text_tag color='violet'>🇭🇴🇱🇾 💩.... đừ🇳🇬 🇱à🇲 🇳🇭ư 🇹🇭ế 🇨🇭ứ! 🇱🇮🇳🇰 🇬🇮ố🇳🇬 🇳🇭🇦🇺 🇲à 🇧ạ🇳 🇪🇮🇮🇮🇮🇮</text_tag>**"
+            elements_list.append(build_centered_tag(warning_msg))
+
         thankyou_md = "<font color='turquoise'>           ┊ t h a n k y o u ┊\n┈┈┈┈┈┈┈┈․° ••• °․┈┈┈┈┈┈┈┈</font>"
+        elements_list.append(build_centered_tag(thankyou_md))
 
-        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Cᴏᴍᴘʟᴇᴛᴇᴅ")
-        card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
         card2_bottom_highlight = build_centered_tag(" **<text_tag color='turquoise'>・𝖣ᝪ𝖭𝖤・</text_tag>** ")
+        elements_list.append(card2_bottom_highlight)
 
-        finish_card_payload = {
-            "elements": card2_img_element + [
-                card2_top_highlight,
-                build_centered_tag(title_side_md),
-                {"tag": "markdown", "content": heading_md},
-                build_centered_tag(thankyou_md),
-                card2_bottom_highlight,
-                {"tag": "hr"},
-                build_footer_element(repeat_tag)
-            ]
-        }
+        elements_list.append({"tag": "hr"})
+        elements_list.append(build_footer_element(repeat_tag))
+
+        finish_card_payload = {"elements": elements_list}
         reply_thread_card(message_id, finish_card_payload)
 
         if clock_rx_id:
