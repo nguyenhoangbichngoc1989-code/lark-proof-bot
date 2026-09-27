@@ -435,7 +435,6 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
                 any(box in header[:128] for box in [b"ftyp", b"moov", b"mdat", b"wide", b"free", b"qt  "])
             )
 
-            # 🌟 Ép buộc tất cả tệp video sang đuôi .mov chuẩn xác theo yêu cầu
             if is_video or (not ext and os.path.getsize(file_path) > 300 * 1024):
                 if ext not in [".mov", ".mp4"]:
                     new_p = os.path.join(dir_name, f"{name}.mov")
@@ -999,7 +998,7 @@ def resolve_short_url(url: str) -> str:
                     "w3.org", "schema.org", "jsdelivr", "cdnjs", "nel.cloudflare", "twitter.com", "zalo.me"
                 ]):
                     continue
-                if any(k in cand_low for k in ["aliyuncs.com", "rc-upload", "fptcloud.com", "drive.google.com", "1drv.ms", "onedrive.live.com", "mega.nz", ".mp4", ".pdf", ".mov"]):
+                if any(k in cand_low for k in ["aliyuncs.com", "rc-upload", "fptcloud.com", "boxme.asia", "drive.google.com", "1drv.ms", "onedrive.live.com", "mega.nz", ".mp4", ".pdf", ".mov"]):
                     found_target = cand_clean
                     break
                 if not found_target:
@@ -1038,7 +1037,6 @@ def download_single_gdrive_file(file_id: str, target_dir: str, preferred_name: s
     }
     real_title = preferred_name or extract_gdrive_title(file_id)
 
-    # 🌟 Ép buộc chuyển đổi sang link download trực tiếp của Google Drive
     direct_urls = [
         f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t",
         f"https://drive.usercontent.google.com/download?id={file_id}&export=download"
@@ -1161,20 +1159,22 @@ def download_proof(url: str, target_dir: str) -> bool:
             if m:
                 return download_single_gdrive_file(m.group(1), target_dir)
 
+    # 🌟 4. Tải trực tiếp (Bổ sung boxme.asia, aliyuncs, fptcloud)
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            "Accept": "*/*"
+            "Accept": "*/*",
+            "Referer": "https://boxme.asia/"
         }
         res = global_session.get(final_url, headers=headers, stream=True, timeout=(25, 400), verify=False)
         if res.status_code in [200, 206]:
             actual_final_url = res.url or final_url
             ct = res.headers.get("Content-Type", "").lower()
-            if "text/html" in ct and not any(k in actual_final_url.lower() for k in ["fptcloud", "aliyuncs", "rc-upload"]):
+            if "text/html" in ct and not any(k in actual_final_url.lower() for k in ["fptcloud", "aliyuncs", "rc-upload", "boxme.asia"]):
                 return False
 
             raw_n = os.path.basename(urllib.parse.urlparse(actual_final_url).path) or "proof_media"
-            if any(k in actual_final_url.lower() for k in ["fptcloud.com", "aliyuncs.com", "rc-upload"]) and not any(raw_n.lower().endswith(x) for x in [".mov", ".mp4", ".jpg", ".png", ".pdf"]):
+            if any(k in actual_final_url.lower() for k in ["fptcloud.com", "aliyuncs.com", "rc-upload", "boxme.asia"]) and not any(raw_n.lower().endswith(x) for x in [".mov", ".mp4", ".jpg", ".png", ".pdf"]):
                 raw_n += ".mov"
             return _save_stream_to_file(res, target_dir, raw_n)
     except Exception as e:
@@ -1441,7 +1441,7 @@ def handle_message(data: lark.im.v1.P2MessageReceiveV1) -> None:
         text = extract_message_text(msg_dict)
 
         if "http://" in text or "https://" in text:
-            log(f"📩 [LARK] BẮT ĐƯỢC TIN NHẮN CHỨA LINK: {text[:60]}...")
+            log(f"📩 [LARK] BẮT ĐƯỢC TIN NHẮN CHỨA LINK: {text[:60]}...pur")
             t = threading.Thread(target=parse_and_dispatch, args=(msg.message_id, chat_id, text, sender_id))
             t.daemon = True
             t.start()
