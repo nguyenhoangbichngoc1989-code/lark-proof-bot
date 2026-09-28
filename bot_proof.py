@@ -42,33 +42,40 @@ except ImportError:
 def log(msg: str):
     print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
-# ----------------- 1. MỞ SERVER HTTP DUY TRÌ RENDER -----------------
+# ----------------- 1. MỞ SERVER HTTP ĐA LUỒNG DUY TRÌ RENDER (CHỐNG NGHẼN 100%) -----------------
 class RenderHealthHandler(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.send_header("Connection", "close")
         self.send_header("Content-Length", "2")
         self.end_headers()
 
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.send_header("Connection", "close")
         self.send_header("Content-Length", "2")
         self.end_headers()
-        self.wfile.write(b"OK")
+        try:
+            self.wfile.write(b"OK")
+        except Exception:
+            pass
 
     def log_message(self, format, *args):
         pass
 
 def run_dummy_web_server():
     port = int(os.environ.get("PORT", 10000))
-    try:
-        socketserver.TCPServer.allow_reuse_address = True
-        with socketserver.TCPServer(("", port), RenderHealthHandler) as httpd:
-            log(f"🌐 Đã mở cổng HTTP {port} để duy trì Render...")
-            httpd.serve_forever()
-    except Exception as e:
-        log(f"Lưu ý server HTTP: {e}")
+    while True:
+        try:
+            server = http.server.ThreadingHTTPServer(("0.0.0.0", port), RenderHealthHandler)
+            server.daemon_threads = True
+            log(f"🌐 Đã mở cổng HTTP {port} đa luồng để duy trì Render...")
+            server.serve_forever()
+        except Exception as e:
+            log(f"Khởi động lại server HTTP do sự cố: {e}")
+            time.sleep(2)
 
 threading.Thread(target=run_dummy_web_server, daemon=True).start()
 
@@ -354,7 +361,7 @@ def get_video_duration(file_path: str) -> float:
         log(f"Lỗi lấy thời lượng video: {e}")
     return 0.0
 
-# ----------------- HÀM NÉN VIDEO ĐẢM BẢO CHUẨN HD VÀ FULL HD (TỐI ƯU CỰC HẠN) -----------------
+# ----------------- HÀM NÉN VIDEO ĐẢM BẢO CHUẨN HD & FULL HD (>720p VÀ 720p) -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
@@ -384,19 +391,17 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
             target_kbps = int((21.5 * 1024 * 8) / duration)
             target_kbps = max(80, min(target_kbps, 240))
             fps = 10 if duration > 1800 else 12
-            # ĐƯA FPS LÊN TRƯỚC SCALE ĐỂ GIẢM 60% KHỐI LƯỢNG TÍNH TOÁN
             vf = f"fps={fps},scale=1280:720:force_original_aspect_ratio=decrease:flags=fast_bilinear,scale=trunc(iw/2)*2:trunc(ih/2)*2"
             log(f"🎬 Áp dụng chuẩn HD 720p (1280x720) cho video >15p ({duration:.1f}s), bitrate: {target_kbps}k, fps: {fps}")
         else:  # <= 15 PHÚT: Đảm bảo chuẩn Full HD > 720p (1920x1080)
             target_kbps = int((22.5 * 1024 * 8) / max(duration, 10))
             target_kbps = max(140, min(target_kbps, 1800))
             if duration > 420:
-                fps = 10  # Dồn tối đa bitrate vào độ nét của từng khung hình tĩnh
+                fps = 10
             elif duration > 180:
                 fps = 12
             else:
                 fps = 15
-            # ĐƯA FPS LÊN TRƯỚC SCALE ĐỂ TRÁNH QUÁ TẢI CPU KHI SCALE 1080P
             vf = f"fps={fps},scale=1920:1080:force_original_aspect_ratio=decrease:flags=fast_bilinear,scale=trunc(iw/2)*2:trunc(ih/2)*2"
             log(f"🎬 Áp dụng chuẩn Full HD >720p (1920x1080) cho video <=15p ({duration:.1f}s), bitrate: {target_kbps}k, fps: {fps}")
 
@@ -406,11 +411,12 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
 
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "0",
+            "-threads", "2",
             "-i", file_path,
             "-vf", vf,
             "-c:v", "libx264", "-preset", "ultrafast",
             "-tune", "fastdecode",
+            "-max_muxing_queue_size", "1024",
             "-x264-params", "rc-lookahead=10:sync-lookahead=5",
             "-b:v", b_v, "-maxrate", maxrate, "-bufsize", bufsize,
             "-pix_fmt", "yuv420p",
@@ -527,7 +533,7 @@ def remove_reaction_from_message(message_id: str, reaction_id: str):
     except Exception as e:
         log(f"Lỗi gỡ reaction: {e}")
 
-# ----------------- TẢI LÊN FILE LARK (DÙNG FILE_TYPE=STREAM CHUẨN XÁC) -----------------
+# ----------------- TẢI LÊN FILE LARK -----------------
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
     if not os.path.exists(file_path):
         return ""
