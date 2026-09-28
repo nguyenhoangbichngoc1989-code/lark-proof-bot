@@ -354,7 +354,7 @@ def get_video_duration(file_path: str) -> float:
         log(f"Lỗi lấy thời lượng video: {e}")
     return 0.0
 
-# ----------------- HÀM NÉN VIDEO ĐẢM BẢO CHUẨN HD VÀ FULL HD (>720p VÀ 720p) -----------------
+# ----------------- HÀM NÉN VIDEO ĐẢM BẢO CHUẨN HD VÀ FULL HD (TỐI ƯU CỰC HẠN) -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
@@ -379,23 +379,25 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         duration = get_video_duration(file_path)
         log(f"⚙️ Video {clean_base}: {size_mb:.2f} MB, thời lượng: {duration:.1f}s.")
 
-        # 🌟 PHÂN CẤP ĐỘ PHÂN GIẢI THEO ĐÚNG TIÊU CHUẨN CỦA CHỊ:
+        # 🌟 PHÂN CẤP ĐỘ PHÂN GIẢI SẮC NÉT THEO ĐÚNG YÊU CẦU:
         if duration > 900:  # > 15 PHÚT: Thấp nhất là chuẩn HD 720p (1280x720)
             target_kbps = int((21.5 * 1024 * 8) / duration)
             target_kbps = max(80, min(target_kbps, 240))
             fps = 10 if duration > 1800 else 12
-            vf = f"scale=1280:720:force_original_aspect_ratio=decrease:flags=fast_bilinear,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps={fps}"
-            log(f"🎬 Áp dụng chuẩn HD 720p (1280x720) cho video dài >15p ({duration:.1f}s), bitrate: {target_kbps}k, fps: {fps}")
-        else:  # <= 15 PHÚT: Đảm bảo chuẩn HD > 720p (Full HD 1080p: 1920x1080)
+            # ĐƯA FPS LÊN TRƯỚC SCALE ĐỂ GIẢM 60% KHỐI LƯỢNG TÍNH TOÁN
+            vf = f"fps={fps},scale=1280:720:force_original_aspect_ratio=decrease:flags=fast_bilinear,scale=trunc(iw/2)*2:trunc(ih/2)*2"
+            log(f"🎬 Áp dụng chuẩn HD 720p (1280x720) cho video >15p ({duration:.1f}s), bitrate: {target_kbps}k, fps: {fps}")
+        else:  # <= 15 PHÚT: Đảm bảo chuẩn Full HD > 720p (1920x1080)
             target_kbps = int((22.5 * 1024 * 8) / max(duration, 10))
             target_kbps = max(140, min(target_kbps, 1800))
             if duration > 420:
-                fps = 12
+                fps = 10  # Dồn tối đa bitrate vào độ nét của từng khung hình tĩnh
             elif duration > 180:
-                fps = 15
+                fps = 12
             else:
-                fps = 20
-            vf = f"scale=1920:1080:force_original_aspect_ratio=decrease:flags=fast_bilinear,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps={fps}"
+                fps = 15
+            # ĐƯA FPS LÊN TRƯỚC SCALE ĐỂ TRÁNH QUÁ TẢI CPU KHI SCALE 1080P
+            vf = f"fps={fps},scale=1920:1080:force_original_aspect_ratio=decrease:flags=fast_bilinear,scale=trunc(iw/2)*2:trunc(ih/2)*2"
             log(f"🎬 Áp dụng chuẩn Full HD >720p (1920x1080) cho video <=15p ({duration:.1f}s), bitrate: {target_kbps}k, fps: {fps}")
 
         b_v = f"{target_kbps}k"
@@ -404,11 +406,12 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
 
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "2",
+            "-threads", "0",
             "-i", file_path,
             "-vf", vf,
             "-c:v", "libx264", "-preset", "ultrafast",
             "-tune", "fastdecode",
+            "-x264-params", "rc-lookahead=10:sync-lookahead=5",
             "-b:v", b_v, "-maxrate", maxrate, "-bufsize", bufsize,
             "-pix_fmt", "yuv420p",
             "-an",
@@ -416,7 +419,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
             temp_out
         ]
 
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=480)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=720)
         gc.collect()
 
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 10000:
@@ -607,7 +610,7 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                     resp = client.im.v1.message.reply(ReplyMessageRequest.builder().message_id(message_id).request_body(file_body).build())
                     if resp and resp.success():
                         actual_sent_count += 1
-                        log(f"📥 Đã bung video phát trực tiếp (.mp4): {os.path.basename(send_path)}")
+                        log(f"📥 Đã bung video phát trực tiếp (.mp4 HD): {os.path.basename(send_path)}")
                     else:
                         log(f"⚠️ Không thể gửi file video vào thread: {getattr(resp, 'code', '')} {getattr(resp, 'msg', '')}")
 
