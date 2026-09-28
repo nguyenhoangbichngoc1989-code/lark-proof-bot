@@ -354,7 +354,7 @@ def get_video_duration(file_path: str) -> float:
         log(f"Lỗi lấy thời lượng video: {e}")
     return 0.0
 
-# ----------------- HÀM NÉN VIDEO THÔNG MINH (DYNAMIC BITRATE & SPEED TỐI ƯU) -----------------
+# ----------------- HÀM NÉN VIDEO ĐẢM BẢO CHUẨN HD VÀ FULL HD (>720p VÀ 720p) -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
@@ -377,28 +377,34 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
         duration = get_video_duration(file_path)
-        log(f"⚙️ Video {clean_base}: {size_mb:.2f} MB, thời lượng: {duration:.1f}s. Bắt đầu nén tối ưu...")
+        log(f"⚙️ Video {clean_base}: {size_mb:.2f} MB, thời lượng: {duration:.1f}s.")
 
-        # Tự động tính Bitrate mục tiêu để sau khi nén file luôn đạt khoảng 22MB (an toàn tuyệt đối dưới ngưỡng 28MB)
-        if duration > 10:
-            target_kbps = int((22.0 * 1024 * 8) / duration)
-            target_kbps = max(80, min(target_kbps, 400))
-        else:
-            target_kbps = 260
+        # 🌟 PHÂN CẤP ĐỘ PHÂN GIẢI THEO ĐÚNG TIÊU CHUẨN CỦA CHỊ:
+        if duration > 900:  # > 15 PHÚT: Thấp nhất là chuẩn HD 720p (1280x720)
+            target_kbps = int((21.5 * 1024 * 8) / duration)
+            target_kbps = max(80, min(target_kbps, 240))
+            fps = 10 if duration > 1800 else 12
+            vf = f"scale=1280:720:force_original_aspect_ratio=decrease:flags=fast_bilinear,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps={fps}"
+            log(f"🎬 Áp dụng chuẩn HD 720p (1280x720) cho video dài >15p ({duration:.1f}s), bitrate: {target_kbps}k, fps: {fps}")
+        else:  # <= 15 PHÚT: Đảm bảo chuẩn HD > 720p (Full HD 1080p: 1920x1080)
+            target_kbps = int((22.5 * 1024 * 8) / max(duration, 10))
+            target_kbps = max(140, min(target_kbps, 1800))
+            if duration > 420:
+                fps = 12
+            elif duration > 180:
+                fps = 15
+            else:
+                fps = 20
+            vf = f"scale=1920:1080:force_original_aspect_ratio=decrease:flags=fast_bilinear,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps={fps}"
+            log(f"🎬 Áp dụng chuẩn Full HD >720p (1920x1080) cho video <=15p ({duration:.1f}s), bitrate: {target_kbps}k, fps: {fps}")
 
         b_v = f"{target_kbps}k"
-        maxrate = f"{int(target_kbps * 1.3)}k"
+        maxrate = f"{int(target_kbps * 1.35)}k"
         bufsize = f"{int(target_kbps * 2.0)}k"
-
-        # Đối với video dài (> 5 phút), giảm độ phân giải xuống 480x270 và fps=12 để nén siêu tốc
-        if duration > 300:
-            vf = "scale=480:270:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=12"
-        else:
-            vf = "scale=640:360:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
 
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "0",
+            "-threads", "2",
             "-i", file_path,
             "-vf", vf,
             "-c:v", "libx264", "-preset", "ultrafast",
@@ -445,7 +451,6 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
             with open(file_path, "rb") as f:
                 header = f.read(512)
 
-            # Loại bỏ nếu phát hiện file HTML/XML lỗi
             if header.startswith(b"<!DOCTYPE") or header.startswith(b"<html") or b"<Error>" in header[:128]:
                 try:
                     os.remove(file_path)
@@ -475,7 +480,6 @@ def auto_detect_and_fix_extension(file_path: str) -> str:
                 any(box in header[:128] for box in [b"ftyp", b"moov", b"mdat", b"wide", b"free", b"qt  "])
             )
 
-            # Ép buộc tất cả video sang đuôi .mp4
             if is_video or (not ext and os.path.getsize(file_path) > 300 * 1024):
                 if ext != ".mp4":
                     new_p = os.path.join(dir_name, f"{name}.mp4")
@@ -593,7 +597,6 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                 if not os.path.exists(send_path) or os.path.getsize(send_path) < 10000:
                     continue
 
-                # 🌟 SỬA DỨT ĐIỂM LỖI 230055: Gửi tin nhắn msg_type="file" bắt buộc upload file_type="stream"
                 file_key = upload_lark_file(send_path, "stream")
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder() \
@@ -938,7 +941,7 @@ def download_onedrive(url: str, target_dir: str) -> bool:
         res_d1 = global_session.get(f"{clean_u}{sep}download=1", headers=headers, stream=True, allow_redirects=True, timeout=(20, 300), verify=False)
         if res_d1.status_code in [200, 206] and "text/html" not in res_d1.headers.get("Content-Type", "").lower():
             return _save_stream_to_file(res_d1, target_dir, "onedrive_video.mp4")
-    except Exception:
+    except Exception as e:
         pass
 
     return False
