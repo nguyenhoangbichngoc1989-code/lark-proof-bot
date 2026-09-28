@@ -339,14 +339,29 @@ def reply_thread_card(message_id: str, card_content: dict):
     except Exception as e:
         log(f"Lỗi reply thread card: {e}")
 
-# ----------------- HÀM NÉN VIDEO NHẸ TẢI CPU & TIẾT KIỆM RAM -----------------
+# ----------------- HÀM TÍNH THỜI LƯỢNG VIDEO BẰNG FFMPEG -----------------
+def get_video_duration(file_path: str) -> float:
+    try:
+        cmd = [FFMPEG_EXEC, "-i", file_path]
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+        m = re.search(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)', proc.stderr)
+        if m:
+            hours = int(m.group(1))
+            mins = int(m.group(2))
+            secs = float(m.group(3))
+            return hours * 3600 + mins * 60 + secs
+    except Exception as e:
+        log(f"Lỗi lấy thời lượng video: {e}")
+    return 0.0
+
+# ----------------- HÀM NÉN VIDEO THÔNG MINH (DYNAMIC BITRATE THEO THỜI LƯỢNG) -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
             return file_path
 
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        if size_mb <= 32.0:
+        if size_mb <= 27.5:
             return file_path
 
         dir_name = os.path.dirname(file_path)
@@ -361,23 +376,35 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         temp_out = os.path.join(dir_name, f"tmp_{uuid.uuid4().hex[:6]}_{clean_base}.mp4")
         final_mp4 = os.path.join(dir_name, f"{clean_base}.mp4")
 
-        log(f"⚙️ Bắt đầu nén nhẹ tải cho video MP4: {clean_base} ({size_mb:.2f} MB)...")
+        duration = get_video_duration(file_path)
+        log(f"⚙️ Video {clean_base}: {size_mb:.2f} MB, thời lượng: {duration:.1f}s. Bắt đầu nén tối ưu...")
+
+        # Tự động tính Bitrate mục tiêu để sau khi nén file luôn đạt khoảng 23MB (an toàn dưới 28MB của Lark)
+        if duration > 10:
+            target_kbps = int((23.0 * 1024 * 8) / duration)
+            target_kbps = max(100, min(target_kbps, 400))
+        else:
+            target_kbps = 280
+
+        b_v = f"{target_kbps}k"
+        maxrate = f"{int(target_kbps * 1.3)}k"
+        bufsize = f"{int(target_kbps * 2.0)}k"
 
         vf = "scale=640:360:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
-            "-threads", "1",
+            "-threads", "0",
             "-i", file_path,
             "-vf", vf,
             "-c:v", "libx264", "-preset", "ultrafast",
-            "-b:v", "350k", "-maxrate", "450k", "-bufsize", "700k",
+            "-b:v", b_v, "-maxrate", maxrate, "-bufsize", bufsize,
             "-pix_fmt", "yuv420p",
             "-an",
             "-movflags", "+faststart",
             temp_out
         ]
 
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=240)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=360)
         gc.collect()
 
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 10000:
@@ -487,13 +514,10 @@ def remove_reaction_from_message(message_id: str, reaction_id: str):
     except Exception as e:
         log(f"Lỗi gỡ reaction: {e}")
 
-# ----------------- TẢI LÊN FILE LARK -----------------
+# ----------------- TẢI LÊN FILE LARK (KHÔNG GỌI LẶP LẠI COMPRESS) -----------------
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
     if not os.path.exists(file_path):
         return ""
-    
-    if os.path.getsize(file_path) / (1024 * 1024) > 32.0:
-        file_path = compress_video_to_safe_mp4(file_path)
 
     token = get_tenant_access_token()
     if not token:
@@ -514,6 +538,8 @@ def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
                 body = res.json()
                 if body.get("code") == 0:
                     return body["data"]["file_key"]
+                else:
+                    log(f"Lark upload trả về code {body.get('code')}: {body.get('msg')}")
     except Exception as e:
         log(f"Lỗi upload: {e}")
     return ""
@@ -555,13 +581,14 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
             # 3. Tệp Video (.mp4 chuẩn cho Lark API)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = f["path"]
-                if os.path.getsize(send_path) / (1024 * 1024) > 32.0:
+                # Nén trước khi upload nếu lớn hơn 27.5MB
+                if os.path.getsize(send_path) / (1024 * 1024) > 27.5:
                     send_path = compress_video_to_safe_mp4(file_path, original_name=file_name)
                 
                 if not os.path.exists(send_path) or os.path.getsize(send_path) < 10000:
                     continue
 
-                file_key = upload_lark_file(send_path, "stream") or upload_lark_file(send_path, "mp4")
+                file_key = upload_lark_file(send_path, "mp4") or upload_lark_file(send_path, "stream")
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder() \
                         .content(json.dumps({"file_key": file_key})) \
@@ -572,6 +599,8 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                     if resp and resp.success():
                         actual_sent_count += 1
                         log(f"📥 Đã bung video phát trực tiếp (.mp4): {os.path.basename(send_path)}")
+                    else:
+                        log(f"⚠️ Không thể gửi file video vào thread: {getattr(resp, 'code', '')} {getattr(resp, 'msg', '')}")
 
             # 4. Tệp khác
             else:
@@ -912,87 +941,74 @@ def download_onedrive(url: str, target_dir: str) -> bool:
 def download_boxme(url: str, target_dir: str) -> bool:
     clean_u = url.strip()
     log(f"📦 Đang xử lý liên kết Boxme: {clean_u}")
-    
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*",
-        "Referer": clean_u
+        "Range": "bytes=0-"
     }
 
-    # BƯỚC 1: Thử lấy link video trực tiếp (bỏ /v/ nếu là viewer)
-    direct_candidates = []
-    if "/v/" in clean_u:
-        direct_candidates.append(clean_u.replace("/v/", "/"))
-        direct_candidates.append(clean_u.replace("/v/", "/raw/"))
-        direct_candidates.append(clean_u.replace("/v/", "/download/"))
-        direct_candidates.append(clean_u.replace("/v/", "/stream/"))
-        direct_candidates.append(clean_u.replace("/v/", "/video/"))
-
-    for cand in direct_candidates:
-        try:
-            r_cand = global_session.get(cand, headers=headers, stream=True, timeout=(15, 300), verify=False)
-            ct = r_cand.headers.get("Content-Type", "").lower()
-            if r_cand.status_code in [200, 206] and ("video" in ct or "octet-stream" in ct or int(r_cand.headers.get("Content-Length", 0)) > 500000):
-                log(f"🎯 Bắt được luồng video Boxme qua URL rút gọn: {cand}")
-                raw_n = os.path.basename(urllib.parse.urlparse(r_cand.url or cand).path) or "boxme_video.mp4"
-                if not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov"]):
-                    raw_n += ".mp4"
-                return _save_stream_to_file(r_cand, target_dir, raw_n)
-        except Exception:
-            pass
-
-    # BƯỚC 2: Tải và bóc tách mã nguồn HTML của trang xem video (/v/)
     try:
-        r = global_session.get(clean_u, headers=headers, timeout=15, verify=False)
-        ct = r.headers.get("Content-Type", "").lower()
+        res = global_session.get(clean_u, headers=headers, stream=True, timeout=(25, 480), verify=False)
+        ct = res.headers.get("Content-Type", "").lower()
 
-        if r.status_code in [200, 206] and ("video" in ct or "octet-stream" in ct):
-            raw_n = os.path.basename(urllib.parse.urlparse(r.url or clean_u).path) or "boxme_video.mp4"
-            if not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov"]):
+        if res.status_code in [200, 206] and "text/html" not in ct:
+            raw_n = os.path.basename(urllib.parse.urlparse(res.url or clean_u).path) or "boxme_video.mp4"
+            if not raw_n.lower().endswith(".mp4"):
                 raw_n += ".mp4"
-            return _save_stream_to_file(r, target_dir, raw_n)
+            saved = _save_stream_to_file(res, target_dir, raw_n)
+            if saved:
+                return True
+    except Exception as e:
+        log(f"Lưu ý tải trực tiếp Boxme: {e}")
 
+    try:
+        html_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        }
+        r = global_session.get(clean_u, headers=html_headers, timeout=15, verify=False)
         html_text = r.text
         unescaped = html.unescape(html_text).replace(r'\/', '/').replace(r'\u002f', '/').replace(r'\u002F', '/')
 
-        found_video_url = ""
+        found_candidates = []
 
-        m_src = re.search(r'<source[^>]+src=["\']([^"\']+)["\']', unescaped, re.IGNORECASE) or \
-                re.search(r'<video[^>]+src=["\']([^"\']+)["\']', unescaped, re.IGNORECASE)
-        if m_src:
-            found_video_url = urllib.parse.urljoin(r.url, m_src.group(1).strip())
+        for m in re.finditer(r'<(?:source|video)[^>]+src=["\']([^"\']+)["\']', unescaped, re.IGNORECASE):
+            found_candidates.append(m.group(1).strip())
 
-        if not found_video_url:
-            m_js = re.search(r'(?:source|src|file|video_url|videoUrl|stream_url|url)\s*[:=]\s*["\'](https?://[^"\']+\.(?:mp4|mov)[^"\']*)["\']', unescaped, re.IGNORECASE)
-            if m_js:
-                found_video_url = m_js.group(1).strip()
+        for m in re.finditer(r'["\']?(?:source|src|file|video_url|videoUrl|stream_url|url)["\']?\s*[:=]\s*["\']([^"\']+\.mp4[^"\']*)["\']', unescaped, re.IGNORECASE):
+            found_candidates.append(m.group(1).strip())
 
-        if not found_video_url:
-            all_mp4 = re.findall(r'(https?://[^\s"\'<>\\]+?\.(?:mp4|mov)[^\s"\'<>\\]*)', unescaped, re.IGNORECASE)
-            for cand in all_mp4:
-                clean_cand = cand.rstrip(';,."\')]>')
-                if clean_cand != clean_u and "/v/" not in clean_cand:
-                    found_video_url = clean_cand
-                    break
+        for m in re.finditer(r'(https?://[^\s"\'<>\\]+?\.mp4[^\s"\'<>\\]*)', unescaped, re.IGNORECASE):
+            cand = m.group(1).rstrip(';,."\')]>')
+            if cand != clean_u and "/v/" not in cand:
+                found_candidates.append(cand)
 
-        if not found_video_url:
-            m_storage = re.search(r'(https?://(?:[a-zA-Z0-9\.\-]*fptcloud\.com|[a-zA-Z0-9\.\-]*s3[a-zA-Z0-9\.\-]*|[a-zA-Z0-9\.\-]*boxme[a-zA-Z0-9\.\-]*)[^\s"\'<>\\]+?\.(?:mp4|mov)[^\s"\'<>\\]*)', unescaped, re.IGNORECASE)
-            if m_storage:
-                cand_st = m_storage.group(1).strip()
-                if cand_st != clean_u and "/v/" not in cand_st:
-                    found_video_url = cand_st
+        if "/v/" in clean_u:
+            found_candidates.append(clean_u.replace("/v/", "/"))
+            found_candidates.append(clean_u.replace("/v/", "/raw/"))
+            found_candidates.append(clean_u.replace("/v/", "/download/"))
+            found_candidates.append(clean_u.replace("/v/", "/stream/"))
+            found_candidates.append(clean_u.replace("/v/", "/video/"))
 
-        if found_video_url:
-            log(f"🎯 Bóc tách thành công URL video gốc Boxme: {found_video_url}")
-            res_dl = global_session.get(found_video_url, headers=headers, stream=True, timeout=(30, 480), verify=False)
-            if res_dl.status_code in [200, 206]:
-                raw_n = os.path.basename(urllib.parse.urlparse(res_dl.url or found_video_url).path) or "boxme_video.mp4"
-                if not any(raw_n.lower().endswith(x) for x in [".mp4", ".mov"]):
-                    raw_n += ".mp4"
-                return _save_stream_to_file(res_dl, target_dir, raw_n)
+        for cand in dict.fromkeys(found_candidates):
+            cand_url = urllib.parse.urljoin(clean_u, cand)
+            try:
+                res_cand = global_session.get(cand_url, headers=headers, stream=True, timeout=(25, 480), verify=False)
+                c_ct = res_cand.headers.get("Content-Type", "").lower()
+                if res_cand.status_code in [200, 206] and "text/html" not in c_ct:
+                    raw_n = os.path.basename(urllib.parse.urlparse(res_cand.url or cand_url).path) or "boxme_video.mp4"
+                    if not raw_n.lower().endswith(".mp4"):
+                        raw_n += ".mp4"
+                    saved = _save_stream_to_file(res_cand, target_dir, raw_n)
+                    if saved:
+                        log(f"🎯 Bóc tách và tải thành công video Boxme: {raw_n}")
+                        return True
+            except Exception:
+                continue
 
     except Exception as e:
-        log(f"Lỗi phân tích video Boxme: {e}")
+        log(f"Lỗi bóc tách HTML Boxme: {e}")
 
     return False
 
@@ -1316,7 +1332,6 @@ def extract_urls_from_text(raw_text: str) -> list:
             else:
                 resolved_list.append(u)
 
-    # Giữ nguyên danh sách thô có thể có trùng để process_single_task kiểm tra has_duplicates
     return [u for u in resolved_list if u.startswith("http") and len(u) > 10]
 
 def extract_message_text(message: dict) -> str:
@@ -1405,7 +1420,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, raw_urls:
             else:
                 reply_thread_card(message_id, {
                     "elements": error_img + [
-                        {"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id}, vui lòng kiểm tra lại quyền truy cập link!</text_tag>"},
+                        {"tag": "markdown", "content": f"<text_tag color='carmine'>🚨 Không thể tải video của 𝗧𝗶𝗰𝗸𝗲𝘁 𝗜𝗗: {ticket_id} ‼️Hãy kiểm tra quyền truy cập link!</text_tag>"},
                         {"tag": "hr"},
                         build_footer_element()
                     ]
@@ -1492,7 +1507,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, raw_urls:
         card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
         elements_list.append(card2_top_highlight)
 
-        title_side_md = "  **<font color='turquoise'>             Cᴏᴍᴘʟᴇᴛᴇᴅ</font>**\n<font color='turquoise'>-ˋˏ 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅ˎˊ-</font>"
+        title_side_md = "  **<font color='turquoise'>             CᴏᴍᴘʟᴇᴛᴇD</font>**\n<font color='turquoise'>-ˋˏ 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐏𝐑𝐎𝐎𝐅ˎˊ-</font>"
         elements_list.append(build_centered_tag(title_side_md))
 
         sender_mention = f"<at id=\"{sender_id}\"></at>" if sender_id else "chị"
