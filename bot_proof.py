@@ -354,7 +354,7 @@ def get_video_duration(file_path: str) -> float:
         log(f"Lỗi lấy thời lượng video: {e}")
     return 0.0
 
-# ----------------- HÀM NÉN VIDEO THÔNG MINH (DYNAMIC BITRATE THEO THỜI LƯỢNG) -----------------
+# ----------------- HÀM NÉN VIDEO THÔNG MINH (DYNAMIC BITRATE & SPEED TỐI ƯU) -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
@@ -379,24 +379,30 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
         duration = get_video_duration(file_path)
         log(f"⚙️ Video {clean_base}: {size_mb:.2f} MB, thời lượng: {duration:.1f}s. Bắt đầu nén tối ưu...")
 
-        # Tự động tính Bitrate mục tiêu để sau khi nén file luôn đạt khoảng 23MB (an toàn dưới 28MB của Lark)
+        # Tự động tính Bitrate mục tiêu để sau khi nén file luôn đạt khoảng 22MB (an toàn tuyệt đối dưới ngưỡng 28MB)
         if duration > 10:
-            target_kbps = int((23.0 * 1024 * 8) / duration)
-            target_kbps = max(100, min(target_kbps, 400))
+            target_kbps = int((22.0 * 1024 * 8) / duration)
+            target_kbps = max(80, min(target_kbps, 400))
         else:
-            target_kbps = 280
+            target_kbps = 260
 
         b_v = f"{target_kbps}k"
         maxrate = f"{int(target_kbps * 1.3)}k"
         bufsize = f"{int(target_kbps * 2.0)}k"
 
-        vf = "scale=640:360:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
+        # Đối với video dài (> 5 phút), giảm độ phân giải xuống 480x270 và fps=12 để nén siêu tốc
+        if duration > 300:
+            vf = "scale=480:270:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=12"
+        else:
+            vf = "scale=640:360:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=15"
+
         cmd = [
             FFMPEG_EXEC, "-y", "-nostdin",
             "-threads", "0",
             "-i", file_path,
             "-vf", vf,
             "-c:v", "libx264", "-preset", "ultrafast",
+            "-tune", "fastdecode",
             "-b:v", b_v, "-maxrate", maxrate, "-bufsize", bufsize,
             "-pix_fmt", "yuv420p",
             "-an",
@@ -404,7 +410,7 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
             temp_out
         ]
 
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=360)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=480)
         gc.collect()
 
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 10000:
@@ -514,7 +520,7 @@ def remove_reaction_from_message(message_id: str, reaction_id: str):
     except Exception as e:
         log(f"Lỗi gỡ reaction: {e}")
 
-# ----------------- TẢI LÊN FILE LARK (KHÔNG GỌI LẶP LẠI COMPRESS) -----------------
+# ----------------- TẢI LÊN FILE LARK (DÙNG FILE_TYPE=STREAM CHUẨN XÁC) -----------------
 def upload_lark_file(file_path: str, file_type: str = "stream") -> str:
     if not os.path.exists(file_path):
         return ""
@@ -578,17 +584,17 @@ def upload_and_send_batch_proofs(message_id: str, final_files: list, urls: list 
                         actual_sent_count += 1
                         log(f"📄 Đã bung tệp PDF vào thread: {file_name}")
 
-            # 3. Tệp Video (.mp4 chuẩn cho Lark API)
+            # 3. Tệp Video (.mp4 chuẩn phát trực tiếp trên Lark)
             elif file_ext in [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".m4v", ".3gp"]:
                 send_path = f["path"]
-                # Nén trước khi upload nếu lớn hơn 27.5MB
                 if os.path.getsize(send_path) / (1024 * 1024) > 27.5:
                     send_path = compress_video_to_safe_mp4(file_path, original_name=file_name)
                 
                 if not os.path.exists(send_path) or os.path.getsize(send_path) < 10000:
                     continue
 
-                file_key = upload_lark_file(send_path, "mp4") or upload_lark_file(send_path, "stream")
+                # 🌟 SỬA DỨT ĐIỂM LỖI 230055: Gửi tin nhắn msg_type="file" bắt buộc upload file_type="stream"
+                file_key = upload_lark_file(send_path, "stream")
                 if file_key:
                     file_body = ReplyMessageRequestBody.builder() \
                         .content(json.dumps({"file_key": file_key})) \
