@@ -42,7 +42,7 @@ except ImportError:
 def log(msg: str):
     print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
-# ----------------- 1. MỞ SERVER HTTP ĐA LUỒNG DUY TRÌ RENDER (CHỐNG NGHẼN 100%) -----------------
+# ----------------- 1. MỞ SERVER HTTP ĐA LUỒNG DUY TRÌ RENDER -----------------
 class RenderHealthHandler(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200)
@@ -71,7 +71,7 @@ def run_dummy_web_server():
         try:
             server = http.server.ThreadingHTTPServer(("0.0.0.0", port), RenderHealthHandler)
             server.daemon_threads = True
-            log(f"🌐 Đã mở cổng HTTP {port} đa luồng để duy trì Render...")
+            log(f"🌐 Đã mở cổng HTTP {port} đa luồng duy trì Render...")
             server.serve_forever()
         except Exception as e:
             log(f"Khởi động lại server HTTP do sự cố: {e}")
@@ -105,6 +105,9 @@ except Exception:
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 pillow_heif.register_heif_opener()
+
+# 🌟 KHÓA ĐIỀU PHỐI: Chỉ cho phép nén duy nhất 1 video tại một thời điểm để bảo vệ RAM 512MB
+FFMPEG_LOCK = threading.Lock()
 
 # ----------------- 2. CẤU HÌNH BIẾN MÔI TRƯỜNG & BANNER ẢNH -----------------
 APP_ID = os.environ.get("APP_ID", "").strip() or os.environ.get("LARK_APP_ID", "").strip()
@@ -361,7 +364,7 @@ def get_video_duration(file_path: str) -> float:
         log(f"Lỗi lấy thời lượng video: {e}")
     return 0.0
 
-# ----------------- HÀM NÉN VIDEO ĐẢM BẢO CHUẨN HD & FULL HD (>720p VÀ 720p) -----------------
+# ----------------- HÀM NÉN VIDEO ĐẢM BẢO CHUẨN HD & FULL HD (TIẾT KIỆM RAM DƯỚI 100MB) -----------------
 def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
@@ -417,7 +420,8 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
             "-c:v", "libx264", "-preset", "ultrafast",
             "-tune", "fastdecode",
             "-max_muxing_queue_size", "1024",
-            "-x264-params", "rc-lookahead=10:sync-lookahead=5",
+            # THUẬT TOÁN TIẾT KIỆM RAM TỐI ĐA CHO RENDER 512MB
+            "-x264-params", "no-mbtree=1:rc-lookahead=5:sync-lookahead=0:bframes=0:ref=1",
             "-b:v", b_v, "-maxrate", maxrate, "-bufsize", bufsize,
             "-pix_fmt", "yuv420p",
             "-an",
@@ -425,8 +429,11 @@ def compress_video_to_safe_mp4(file_path: str, original_name: str = "") -> str:
             temp_out
         ]
 
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=720)
-        gc.collect()
+        # Sử dụng FFMPEG_LOCK: Đảm bảo chỉ 1 video được nén tại một thời điểm
+        with FFMPEG_LOCK:
+            log(f"🔒 Bắt đầu nén video: {clean_base}")
+            proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=720)
+            gc.collect()
 
         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 10000:
             out_mb = os.path.getsize(temp_out) / (1024 * 1024)
@@ -1519,7 +1526,7 @@ def process_single_task(message_id: str, chat_id: str, ticket_id: str, raw_urls:
 
         # ---------------- THẺ 2: HOÀN TẤT ----------------
         elements_list = []
-        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "Cᴏᴍᴘʟᴇᴛᴇᴅ")
+        card2_img_element = build_half_size_banner(BANNER_COMPLETED_KEY, "CᴏᴍᴘʟᴇᴛᴇD")
         elements_list.extend(card2_img_element)
 
         card2_top_highlight = build_highlight_box("<font color='white'><b>·.¸¸.·♩♪♫ Gʀᴇᴀᴛ ᴛᴏ ʜᴀᴠᴇ ᴇᴠᴇʀʏᴏɴᴇ ♫♪♩·.¸¸.·</b></font>", bg_style="turquoise")
